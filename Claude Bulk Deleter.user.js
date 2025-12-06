@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Bulk Deleter
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Button to bulk delete all Claude.ai chats with log, two click confirmation, and auto remount UI
 // @author       akeslo
 // @match        https://claude.ai/*
@@ -31,7 +31,7 @@
 
   // ---------- UI ----------
   GM_addStyle(`
-    #bd-btn{position:fixed;top:12px;left:12px;z-index:2147483647;padding:10px 14px;border:none;border-radius:10px;background:#ef4444;color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+    #bd-btn{position:fixed;top:12px;left:12px;z-index:2147483647;padding:10px 14px;border:none;border-radius:10px;background:#D97757;color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35)}
     #bd-btn[disabled]{opacity:.6;cursor:not-allowed}
     #bd-log{position:fixed;bottom:12px;left:12px;width:460px;max-height:55vh;overflow:auto;border:1px solid #2e2e2e;background:#111;color:#ddd;border-radius:10px;z-index:2147483647;box-shadow:0 8px 24px rgba(0,0,0,.35);font:12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;display:none}
     #bd-log header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #2e2e2e;background:#181818;border-top-left-radius:10px;border-top-right-radius:10px}
