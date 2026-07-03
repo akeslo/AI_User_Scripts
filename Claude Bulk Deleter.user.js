@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Claude Bulk Deleter
+// @name         Claude Bulk Deleter (with Claude Code support)
 // @namespace    http://tampermonkey.net/
-// @version      1.2
-// @description  Bulk delete Claude.ai chats. Auto detects org id, paginates, keeps log visible on error.
+// @version      1.7
+// @description  Bulk delete Claude.ai chats. Auto detects org id, paginates, keeps log visible on error, skips starred chats, auto-deletes archived Claude Code sessions, confirms active Claude Code sessions one by one. Collapsible bottom-right pull tab with progress-bar fill.
 // @author       akeslo
 // @match        https://claude.ai/*
 // @grant        GM_addStyle
@@ -21,6 +21,7 @@
     mounted: false,
     running: false,
     armed: false,
+    collapsed: true,
     logStore: [],
     ensureTimer: null,
     lastUrl: location.href,
@@ -29,9 +30,14 @@
   const S = window.__CLAUDE_BD_SUP__;
 
   GM_addStyle(`
-    #bd-btn{position:fixed;top:12px;left:12px;z-index:2147483647;padding:10px 14px;border:none;border-radius:10px;background:#D97757;color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35)}
-    #bd-btn[disabled]{opacity:.6;cursor:not-allowed}
-    #bd-log{position:fixed;bottom:12px;left:12px;width:520px;max-height:55vh;overflow:auto;border:1px solid #2e2e2e;background:#111;color:#ddd;border-radius:10px;z-index:2147483647;box-shadow:0 8px 24px rgba(0,0,0,.35);font:12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;display:none}
+    #bd-wrap{position:fixed;bottom:16px;right:0;z-index:2147483647;display:flex;align-items:stretch;transition:transform .25s ease}
+    #bd-wrap.bd-collapsed{transform:translateX(calc(100% - 18px))}
+    #bd-tab{width:18px;background:#D97757;border-radius:8px 0 0 8px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;font-size:13px;user-select:none;flex-shrink:0;box-shadow:-4px 0 12px rgba(0,0,0,.3)}
+    #bd-btn{position:relative;overflow:hidden;padding:10px 14px;border:none;border-radius:0 10px 10px 0;background:#8f4429;color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35);white-space:nowrap}
+    #bd-btn[disabled]{cursor:not-allowed}
+    #bd-btn-fill{position:absolute;left:0;top:0;bottom:0;width:100%;background:#D97757;transform:scaleX(0);transform-origin:left;transition:transform .2s linear;z-index:0}
+    #bd-btn-text{position:relative;z-index:1}
+    #bd-log{position:fixed;bottom:70px;right:12px;width:520px;max-height:55vh;overflow:auto;border:1px solid #2e2e2e;background:#111;color:#ddd;border-radius:10px;z-index:2147483647;box-shadow:0 8px 24px rgba(0,0,0,.35);font:12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;display:none}
     #bd-log header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #2e2e2e;background:#181818;border-top-left-radius:10px;border-top-right-radius:10px}
     #bd-log header b{font-size:12px}
     #bd-log header button{background:#333;border:1px solid #444;color:#eee;border-radius:6px;padding:4px 8px;cursor:pointer;margin-left:4px}
@@ -55,14 +61,22 @@
     console.log('[ClaudeBulkDeleter]', ...a);
   }
 
+  function setBtn(text, pct) {
+    const t = get('#bd-btn-text');
+    const f = get('#bd-btn-fill');
+    if (t) t.textContent = text;
+    if (f) f.style.transform = `scaleX(${(pct == null ? 0 : pct) / 100})`;
+  }
+
   // Pull common headers Claude's own UI sends. Helps with CSRF style checks.
+  // anthropic-version is required by the /v1/code/sessions endpoints, harmless elsewhere.
   function commonHeaders(extra) {
     const h = {
       'Content-Type': 'application/json',
-      'Accept': 'application/json'
+      'Accept': 'application/json',
+      'anthropic-client-platform': 'web_claude_ai',
+      'anthropic-version': '2023-06-01'
     };
-    // some deployments check this header
-    h['anthropic-client-platform'] = 'web_claude_ai';
     return Object.assign(h, extra || {});
   }
 
@@ -79,22 +93,33 @@
         return "";
       }
       const j = await r.json();
-      // shape varies. try a few common spots.
+      // shape varies. try a few common spots. Prefer an org with chat capability -
+      // some accounts have an API-only org listed first that 403s on chat endpoints.
       const candidates = [];
       if (j && j.account && Array.isArray(j.account.memberships)) {
         for (const m of j.account.memberships) {
-          if (m && m.organization && m.organization.uuid) candidates.push(m.organization.uuid);
+          if (m && m.organization && m.organization.uuid) {
+            candidates.push({
+              uuid: m.organization.uuid,
+              caps: m.organization.capabilities || []
+            });
+          }
         }
       }
       if (Array.isArray(j.organizations)) {
-        for (const o of j.organizations) if (o && o.uuid) candidates.push(o.uuid);
+        for (const o of j.organizations) {
+          if (o && o.uuid) candidates.push({ uuid: o.uuid, caps: o.capabilities || [] });
+        }
       }
-      if (j && j.organization && j.organization.uuid) candidates.push(j.organization.uuid);
+      if (j && j.organization && j.organization.uuid) {
+        candidates.push({ uuid: j.organization.uuid, caps: j.organization.capabilities || [] });
+      }
       if (candidates.length) {
-        orgId = candidates[0];
-        log(`auto detected org id ${orgId}`);
+        const chatOrg = candidates.find(c => c.caps.includes('chat') || c.caps.includes('claude_max'));
+        orgId = (chatOrg || candidates[0]).uuid;
+        log(`auto detected org id ${orgId}${chatOrg ? ' (chat capable)' : ' (no chat-capable org found, using first)'}`);
         if (candidates.length > 1) {
-          log(`note: ${candidates.length} orgs found, using the first. Edit script if wrong.`);
+          log(`note: ${candidates.length} orgs found, picked by chat capability. Edit script if wrong.`);
         }
         return orgId;
       }
@@ -164,11 +189,48 @@
       }
     }
     log(`total chats fetched ${all.length}`);
-    return all;
+    return all.map(c => ({ ...c, _kind: 'chat', _id: c.uuid, _title: c.name || '(no title)' }));
+  }
+
+  // Claude Code sessions live at a completely separate endpoint from chat_conversations,
+  // with ids like cse_..., and a real status field: active / paused / archived.
+  // Max limit is 200 and the endpoint doesn't support real backward pagination
+  // (resume_token is for forward/incremental sync, not paging older items), so this
+  // is best-effort: it grabs the most recent 200 and says so if there may be more.
+  async function fetchAllCodeSessions() {
+    try {
+      const resp = await fetch(`${location.origin}/v1/code/sessions?limit=200`, {
+        credentials: 'include',
+        cache: 'no-store',
+        headers: commonHeaders()
+      });
+      if (!resp.ok) {
+        log(`fetch code sessions failed status ${resp.status}`);
+        return [];
+      }
+      const data = await resp.json();
+      const arr = Array.isArray(data.data) ? data.data : [];
+      log(`fetched ${arr.length} Claude Code sessions`);
+      if (arr.length >= 200) {
+        log('note: 200-session cap hit, older Claude Code sessions may exist but the API has no reliable way to page past this. Not deleted this pass.');
+      }
+      return arr.map(s => ({
+        ...s,
+        _kind: 'code',
+        _id: s.id,
+        _title: s.title || '(no title)',
+        _archived: s.status === 'archived'
+      }));
+    } catch (e) {
+      log(`fetch code sessions error ${String(e)}`);
+      return [];
+    }
   }
 
   async function deleteChat(chat) {
-    const url = `${apiBase()}/chat_conversations/${chat.uuid}`;
+    const url = chat._kind === 'code'
+      ? `${location.origin}/v1/code/sessions/${chat._id}`
+      : `${apiBase()}/chat_conversations/${chat._id}`;
     try {
       const res = await fetch(url, {
         method: 'DELETE',
@@ -176,28 +238,51 @@
         headers: commonHeaders()
       });
       if (res.ok) {
-        log(`ok "${chat.name || '(no title)'}" ${chat.uuid}`);
+        log(`ok "${chat._title}" ${chat._id}`);
         return true;
       } else {
         let body = '';
         try { body = (await res.text()).slice(0, 200); } catch {}
-        log(`fail status ${res.status} "${chat.name || '(no title)'}" ${chat.uuid} body ${body}`);
+        log(`fail status ${res.status} "${chat._title}" ${chat._id} body ${body}`);
         return false;
       }
     } catch (e) {
-      log(`error delete ${chat.uuid} ${String(e)}`);
+      log(`error delete ${chat._id} ${String(e)}`);
       return false;
     }
   }
 
+  function applyCollapsed() {
+    const wrap = get('#bd-wrap');
+    const tab = get('#bd-tab');
+    if (!wrap) return;
+    wrap.classList.toggle('bd-collapsed', S.collapsed);
+    if (tab) tab.textContent = S.collapsed ? '‹' : '›';
+  }
+
   function mountUI() {
-    let btn = get('#bd-btn');
-    if (!btn) {
-      btn = document.createElement('button');
+    let wrap = get('#bd-wrap');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.id = 'bd-wrap';
+
+      const tab = document.createElement('div');
+      tab.id = 'bd-tab';
+      tab.title = 'Show/hide bulk deleter';
+      tab.addEventListener('click', () => {
+        S.collapsed = !S.collapsed;
+        applyCollapsed();
+      }, { passive: true });
+
+      const btn = document.createElement('button');
       btn.id = 'bd-btn';
-      btn.textContent = 'Delete All Chats';
+      btn.innerHTML = `<span id="bd-btn-fill"></span><span id="bd-btn-text">Delete Unstarred Chats</span>`;
       btn.addEventListener('click', onButtonClick, { passive: true });
-      document.body.appendChild(btn);
+
+      wrap.appendChild(tab);
+      wrap.appendChild(btn);
+      document.body.appendChild(wrap);
+      applyCollapsed();
     }
 
     let box = get('#bd-log');
@@ -238,7 +323,7 @@
 
   function ensureUI() {
     if (!document.body) return;
-    if (!get('#bd-btn') || !get('#bd-log')) mountUI();
+    if (!get('#bd-wrap') || !get('#bd-log')) mountUI();
   }
 
   function hookSPARouteChanges() {
@@ -285,37 +370,67 @@
       S.running = true;
       showLog(true);
       btn.disabled = true;
-      btn.textContent = 'Scanning...';
+      setBtn('Scanning...', null);
       log('scan start');
 
       if (!orgId) await detectOrgId();
       if (!orgId) {
         log('no org id available, aborting');
         btn.disabled = false;
-        btn.textContent = 'Delete All Chats';
+        setBtn('Delete Unstarred Chats', 0);
         S.running = false;
-        // keep log visible so user sees the error
         return;
       }
 
-      const chats = await fetchAllChats();
-      S.chats = chats || [];
+      const [allChats, allCodeSessions] = await Promise.all([
+        fetchAllChats(),
+        fetchAllCodeSessions()
+      ]);
+
+      const normalChats = [];
+      let starredCount = 0;
+
+      allChats.forEach(c => {
+        if (c.is_starred) {
+          starredCount++;
+        } else {
+          normalChats.push(c);
+        }
+      });
+
+      const archivedCodeSessions = allCodeSessions.filter(s => s._archived);
+      const activeCodeSessions = allCodeSessions.filter(s => !s._archived);
+
+      S.chats = normalChats.concat(archivedCodeSessions);
+
+      log(`Found ${archivedCodeSessions.length} archived Claude Code sessions (auto-queued).`);
+
+      // Active/paused Claude Code sessions get confirmed one by one, never bulk-added.
+      if (activeCodeSessions.length > 0) {
+        log(`Found ${activeCodeSessions.length} active/paused Claude Code sessions.`);
+        let added = 0;
+        for (const s of activeCodeSessions) {
+          if (confirm(`Delete active Claude Code session:\n"${s._title}"\nstatus: ${s.status}?`)) {
+            S.chats.push(s);
+            added++;
+          }
+        }
+        log(`Individually added ${added} active Claude Code sessions to deletion queue.`);
+      }
 
       S.running = false;
       btn.disabled = false;
 
       if (!S.chats.length) {
-        log('no chats found. If you have chats, the API shape may have changed. Check Network tab for /chat_conversations.');
-        btn.textContent = 'Delete All Chats';
-        // keep log visible for diagnosis
+        log(`No eligible chats found to delete. (Skipped ${starredCount} starred chats).`);
+        setBtn('Delete Unstarred Chats', 0);
         return;
       }
 
-      // success, hide the log to avoid clutter before the second click
       showLog(false);
       S.armed = true;
-      btn.textContent = `Click again to delete ${S.chats.length} chats`;
-      log(`armed with ${S.chats.length} chats`);
+      setBtn(`Click again to delete ${S.chats.length} chats`, 0);
+      log(`Armed with ${S.chats.length} chats for deletion (Skipped ${starredCount} starred chats)`);
       return;
     }
 
@@ -329,7 +444,7 @@
       if (!chats.length) {
         log('no chats in memory, aborting');
         btn.disabled = false;
-        btn.textContent = 'Delete All Chats';
+        setBtn('Delete Unstarred Chats', 0);
         S.running = false;
         return;
       }
@@ -337,7 +452,7 @@
       if (!confirm(`This will permanently delete ${chats.length} chats.\n\nAre you sure?`)) {
         log('user cancelled');
         btn.disabled = false;
-        btn.textContent = 'Delete All Chats';
+        setBtn('Delete Unstarred Chats', 0);
         S.running = false;
         showLog(false);
         return;
@@ -346,17 +461,17 @@
       let ok = 0, fail = 0;
       for (let i = 0; i < chats.length; i++) {
         const chat = chats[i];
-        btn.textContent = `Deleting ${i + 1}/${chats.length}...`;
+        setBtn(`Deleting ${i + 1}/${chats.length}...`, (i / chats.length) * 100);
         const good = await deleteChat(chat);
         if (good) ok++; else fail++;
+        setBtn(`Deleting ${i + 1}/${chats.length}...`, ((i + 1) / chats.length) * 100);
         await sleep(500);
       }
 
       log(`done ok ${ok} fail ${fail}`);
-      btn.textContent = 'Delete All Chats';
+      setBtn('Delete Unstarred Chats', 0);
       btn.disabled = false;
       S.running = false;
-      // leave log visible if anything failed
       if (fail === 0) {
         showLog(false);
         if (ok > 0) setTimeout(() => location.reload(), 1200);

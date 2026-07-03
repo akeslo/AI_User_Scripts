@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Bulk Deleter
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Delete all Gemini chats with two-click arm mechanism
 // @author       akeslo
 // @match        https://gemini.google.com/*
@@ -64,52 +64,17 @@
   }
 
   function getConversationDivs() {
-    const convos = getAll('.conversation');
-    return Array.from(convos).filter(c => {
-      return c.querySelector('.conversation-title') !== null;
-    });
+    return Array.from(getAll('gem-nav-list-item[data-test-id="conversation"]'));
   }
 
   function findMenuButtonForConversation(convoDiv) {
-    // Strategy 1: Look in parent container
-    let parent = convoDiv.parentElement;
-    if (parent) {
-      let menuBtn = parent.querySelector('.conversation-actions-menu-button');
-      if (menuBtn) return menuBtn;
-    }
-
-    // Strategy 2: Look for sibling with same Angular component class
-    const ngClass = Array.from(convoDiv.classList).find(c => c.startsWith('ng-tns-'));
-    if (ngClass) {
-      const buttons = getAll('.conversation-actions-menu-button');
-      for (const btn of buttons) {
-        if (btn.classList.contains(ngClass)) {
-          return btn;
-        }
-      }
-    }
-
-    // Strategy 3: Look in grandparent
-    if (parent?.parentElement) {
-      let menuBtn = parent.parentElement.querySelector('.conversation-actions-menu-button');
-      if (menuBtn) return menuBtn;
-    }
-
-    // Strategy 4: Hover over the conversation and look for visible menu button
-    convoDiv.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-    const allMenuButtons = getAll('.conversation-actions-menu-button');
-    for (const btn of allMenuButtons) {
-      if (btn.offsetParent !== null && btn.style.display !== 'none') {
-        return btn;
-      }
-    }
-
-    return null;
+    // The actual clickable <button> lives nested inside the gem-icon-button wrapper.
+    return convoDiv.querySelector('[data-test-id="actions-menu-button"] button');
   }
 
   async function deleteConversation(convoDiv) {
     try {
-      const title = convoDiv.querySelector('.conversation-title')?.textContent.trim().substring(0, 40) || 'Untitled';
+      const title = convoDiv.querySelector('.title-text')?.textContent.trim().substring(0, 40) || 'Untitled';
 
       // Hover to make menu button visible
       convoDiv.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
@@ -168,7 +133,7 @@
       }));
       await sleep(100);
 
-      return { success: false, title: convoDiv.querySelector('.conversation-title')?.textContent.trim().substring(0, 40) || 'Unknown', error: e.message };
+      return { success: false, title: convoDiv.querySelector('.title-text')?.textContent.trim().substring(0, 40) || 'Unknown', error: e.message };
     }
   }
 
