@@ -17,7 +17,8 @@
   // Leave blank to auto detect from /api/bootstrap. Or hardcode your org id here.
   let orgId = "";
 
-  window.__CLAUDE_BD_SUP__ = window.__CLAUDE_BD_SUP__ || {
+  // module-scoped state, not on window so other page scripts can't read/write the delete queue
+  const S = {
     mounted: false,
     running: false,
     armed: false,
@@ -27,21 +28,21 @@
     lastUrl: location.href,
     chats: []
   };
-  const S = window.__CLAUDE_BD_SUP__;
 
   GM_addStyle(`
     #bd-wrap{position:fixed;bottom:16px;right:0;z-index:2147483647;display:flex;align-items:stretch;transition:transform .25s ease}
     #bd-wrap.bd-collapsed{transform:translateX(calc(100% - 18px))}
     #bd-tab{width:18px;background:#D97757;border-radius:8px 0 0 8px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;font-size:13px;user-select:none;flex-shrink:0;box-shadow:-4px 0 12px rgba(0,0,0,.3)}
-    #bd-btn{position:relative;overflow:hidden;padding:10px 14px;border:none;border-radius:0 10px 10px 0;background:#8f4429;color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35);white-space:nowrap}
-    #bd-btn[disabled]{cursor:not-allowed}
+    #bd-btn{position:relative;overflow:hidden;padding:10px 14px;border:none;border-radius:0 10px 10px 0;background:#8f4429;color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35);white-space:nowrap;transition:background .2s}
+    #bd-btn[disabled]{opacity:.6;cursor:not-allowed}
+    #bd-btn.bd-armed{background:#b3261e}
     #bd-btn-fill{position:absolute;left:0;top:0;bottom:0;width:100%;background:#D97757;transform:scaleX(0);transform-origin:left;transition:transform .2s linear;z-index:0}
     #bd-btn-text{position:relative;z-index:1}
-    #bd-log{position:fixed;bottom:70px;right:12px;width:520px;max-height:55vh;overflow:auto;border:1px solid #2e2e2e;background:#111;color:#ddd;border-radius:10px;z-index:2147483647;box-shadow:0 8px 24px rgba(0,0,0,.35);font:12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;display:none}
+    #bd-log{position:fixed;bottom:70px;right:12px;width:520px;max-width:calc(100vw - 24px);max-height:55vh;overflow:auto;border:1px solid #2e2e2e;background:#111;color:#ddd;border-radius:10px;z-index:2147483647;box-shadow:0 8px 24px rgba(0,0,0,.35);font:12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;display:none}
     #bd-log header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #2e2e2e;background:#181818;border-top-left-radius:10px;border-top-right-radius:10px}
     #bd-log header b{font-size:12px}
     #bd-log header button{background:#333;border:1px solid #444;color:#eee;border-radius:6px;padding:4px 8px;cursor:pointer;margin-left:4px}
-    #bd-log pre{white-space:pre-wrap;margin:0;padding:10px;line-height:1.35}
+    #bd-log pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:10px;line-height:1.35}
   `);
 
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -53,6 +54,7 @@
     if (el) el.style.display = show ? 'block' : 'none';
   }
 
+  // NOTE: log must stay textContent, never innerHTML, to avoid stored XSS from API response bodies
   function log(...a) {
     const line = a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ');
     S.logStore.push(`[${new Date().toLocaleTimeString()}] ${line}`);
@@ -117,7 +119,8 @@
       if (candidates.length) {
         const chatOrg = candidates.find(c => c.caps.includes('chat') || c.caps.includes('claude_max'));
         orgId = (chatOrg || candidates[0]).uuid;
-        log(`auto detected org id ${orgId}${chatOrg ? ' (chat capable)' : ' (no chat-capable org found, using first)'}`);
+        const shortOrgId = orgId.length > 8 ? `${orgId.slice(0, 8)}...` : orgId;
+        log(`auto detected org id ${shortOrgId}${chatOrg ? ' (chat capable)' : ' (no chat-capable org found, using first)'}`);
         if (candidates.length > 1) {
           log(`note: ${candidates.length} orgs found, picked by chat capability. Edit script if wrong.`);
         }
@@ -276,7 +279,7 @@
 
       const btn = document.createElement('button');
       btn.id = 'bd-btn';
-      btn.innerHTML = `<span id="bd-btn-fill"></span><span id="bd-btn-text">Delete Unstarred Chats</span>`;
+      btn.innerHTML = `<span id="bd-btn-fill"></span><span id="bd-btn-text" role="status" aria-live="polite">Delete Unstarred Chats</span>`;
       btn.addEventListener('click', onButtonClick, { passive: true });
 
       wrap.appendChild(tab);
@@ -298,7 +301,7 @@
             <button id="bd-clear">Clear</button>
           </div>
         </header>
-        <pre id="bd-pre"></pre>
+        <pre id="bd-pre" role="log" aria-live="polite"></pre>
       `;
       document.body.appendChild(box);
     }
@@ -348,7 +351,11 @@
       return r;
     };
     window.addEventListener('popstate', onChange);
-    new MutationObserver(() => ensureUI()).observe(document.documentElement, {
+    let debounceTimer = null;
+    new MutationObserver(() => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(ensureUI, 200);
+    }).observe(document.documentElement, {
       childList: true,
       subtree: true
     });
@@ -418,6 +425,16 @@
         log(`Individually added ${added} active Claude Code sessions to deletion queue.`);
       }
 
+      // de-dupe by _id before arming, in case the same chat/session surfaced from more than one source
+      {
+        const seenIds = new Set();
+        S.chats = S.chats.filter(c => {
+          if (seenIds.has(c._id)) return false;
+          seenIds.add(c._id);
+          return true;
+        });
+      }
+
       S.running = false;
       btn.disabled = false;
 
@@ -429,6 +446,7 @@
 
       showLog(false);
       S.armed = true;
+      btn.classList.add('bd-armed');
       setBtn(`Click again to delete ${S.chats.length} chats`, 0);
       log(`Armed with ${S.chats.length} chats for deletion (Skipped ${starredCount} starred chats)`);
       return;
@@ -436,6 +454,7 @@
 
     if (S.armed) {
       S.armed = false;
+      btn.classList.remove('bd-armed');
       S.running = true;
       showLog(true);
       btn.disabled = true;
@@ -474,7 +493,7 @@
       S.running = false;
       if (fail === 0) {
         showLog(false);
-        if (ok > 0) setTimeout(() => location.reload(), 1200);
+        if (ok > 0) setTimeout(() => location.reload(), 2500);
       }
     }
   }

@@ -14,26 +14,29 @@
 (function () {
   'use strict';
 
-  window.__GBD_SUP__ = window.__GBD_SUP__ || {
+  // module-scoped state, not on window so other page scripts can't read/write the delete queue
+  const S = {
     mounted: false,
     running: false,
     armed: false,
     logStore: [],
     ensureTimer: null,
-    lastUrl: location.href
+    lastUrl: location.href,
+    convos: []
   };
-  const S = window.__GBD_SUP__;
 
   GM_addStyle(`
     #gbd-btn{position:fixed;top:12px;left:12px;z-index:2147483647;padding:10px 14px;border:none;border-radius:10px;background:#1a73e8;color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35);transition:background .2s}
     #gbd-btn:hover{background:#1765cc}
     #gbd-btn[disabled]{opacity:.6;cursor:not-allowed;background:#5f6368}
-    #gbd-log{position:fixed;bottom:12px;left:12px;width:500px;max-height:60vh;overflow:auto;border:1px solid #dadce0;background:#fff;color:#202124;border-radius:10px;z-index:2147483647;box-shadow:0 8px 24px rgba(0,0,0,.35);font:11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;display:none}
+    #gbd-btn.gbd-armed{background:#c5221f}
+    #gbd-btn.gbd-armed:hover{background:#a3160f}
+    #gbd-log{position:fixed;bottom:12px;left:12px;width:500px;max-width:calc(100vw - 24px);max-height:60vh;overflow:auto;border:1px solid #dadce0;background:#fff;color:#202124;border-radius:10px;z-index:2147483647;box-shadow:0 8px 24px rgba(0,0,0,.35);font:11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;display:none}
     #gbd-log header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #dadce0;background:#f8f9fa;border-top-left-radius:10px;border-top-right-radius:10px}
     #gbd-log header b{font-size:12px;font-weight:600}
     #gbd-log header button{background:#fff;border:1px solid #dadce0;color:#202124;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;margin-left:4px}
     #gbd-log header button:hover{background:#f8f9fa}
-    #gbd-log pre{white-space:pre-wrap;margin:0;padding:10px;line-height:1.5;font-size:11px}
+    #gbd-log pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:10px;line-height:1.5;font-size:11px}
     @media (prefers-color-scheme: dark) {
       #gbd-log{background:#202124;color:#e8eaed;border-color:#5f6368}
       #gbd-log header{background:#292a2d;border-color:#5f6368}
@@ -51,6 +54,7 @@
     if (el) el.style.display = show ? 'block' : 'none';
   }
 
+  // NOTE: log must stay textContent, never innerHTML, to avoid stored XSS from API response bodies
   function log(...a) {
     const timestamp = new Date().toLocaleTimeString();
     const line = `[${timestamp}] ` + a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ');
@@ -65,6 +69,26 @@
 
   function getConversationDivs() {
     return Array.from(getAll('gem-nav-list-item[data-test-id="conversation"]'));
+  }
+
+  function extractTitle(convoDiv) {
+    return convoDiv.querySelector('.title-text')?.textContent.trim().substring(0, 40) || 'Untitled';
+  }
+
+  // Gemini's sidebar list is virtualized: DOM nodes get recycled to represent a
+  // different conversation as the user scrolls, so a node cached at scan time can
+  // silently point at the wrong (or a stale) row by the time we act on it later in
+  // the loop. Best effort fix: tag each row with a unique key at scan time and
+  // re-query the live list for that key right before acting on it, falling back to
+  // matching by title text. If neither is found, skip and log clearly rather than
+  // acting on a possibly-recycled node.
+  function findLiveConversation(key, title, usedKeys) {
+    const live = getConversationDivs();
+    let el = live.find(d => d.dataset.gbdKey === key && !usedKeys.has(d));
+    if (!el) {
+      el = live.find(d => extractTitle(d) === title && !usedKeys.has(d));
+    }
+    return el || null;
   }
 
   function findMenuButtonForConversation(convoDiv) {
@@ -83,7 +107,7 @@
       // Find the actions menu button
       const menuBtn = findMenuButtonForConversation(convoDiv);
       if (!menuBtn) {
-        throw new Error(`No menu button found for "${title}"`);
+        throw new Error(`Selector not found for menu button on "${title}" — Gemini's UI may have changed, this tool may need updating`);
       }
 
       // Click menu button
@@ -93,13 +117,13 @@
       // Wait for menu to appear
       const menu = await waitForMenu();
       if (!menu) {
-        throw new Error('Menu did not appear');
+        throw new Error(`Selector not found — menu did not appear for "${title}", Gemini's UI may have changed, this tool may need updating`);
       }
 
       // Find delete button in menu
       const deleteBtn = await findDeleteButton(menu);
       if (!deleteBtn) {
-        throw new Error('Delete button not found in menu');
+        throw new Error(`Selector not found — delete button not found in menu for "${title}", Gemini's UI may have changed, this tool may need updating`);
       }
 
       // Click delete
@@ -109,7 +133,7 @@
       // Find and click confirm button
       const confirmBtn = await findConfirmButton();
       if (!confirmBtn) {
-        throw new Error('Confirm button not found');
+        throw new Error(`Selector not found — confirm button not found for "${title}", Gemini's UI may have changed, this tool may need updating`);
       }
 
       confirmBtn.click();
@@ -188,6 +212,8 @@
       btn = document.createElement('button');
       btn.id = 'gbd-btn';
       btn.textContent = 'Delete All Chats';
+      btn.setAttribute('role', 'status');
+      btn.setAttribute('aria-live', 'polite');
       btn.addEventListener('click', onButtonClick, { passive: true });
       document.body.appendChild(btn);
     }
@@ -220,6 +246,8 @@
 
       const pre = document.createElement('pre');
       pre.id = 'gbd-pre';
+      pre.setAttribute('role', 'log');
+      pre.setAttribute('aria-live', 'polite');
 
       box.appendChild(header);
       box.appendChild(pre);
@@ -285,7 +313,11 @@
     };
 
     window.addEventListener('popstate', onChange);
-    new MutationObserver(() => ensureUI()).observe(document.documentElement, {
+    let debounceTimer = null;
+    new MutationObserver(() => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(ensureUI, 200);
+    }).observe(document.documentElement, {
       childList: true,
       subtree: true
     });
@@ -315,13 +347,19 @@
       log('Scanning for conversations...');
 
       await sleep(500);
-      const convos = getConversationDivs();
-      window.__GBD_CONVOS__ = convos;
+      const convoDivs = getConversationDivs();
+      // Tag each row with a stable key so we can re-find it in the live (virtualized)
+      // list later instead of acting on a possibly-recycled cached node.
+      S.convos = convoDivs.map((el, i) => {
+        const key = `gbd-${Date.now()}-${i}`;
+        el.dataset.gbdKey = key;
+        return { key, title: extractTitle(el) };
+      });
 
       btn.disabled = false;
       S.running = false;
 
-      if (!convos.length) {
+      if (!S.convos.length) {
         btn.textContent = 'Delete All Chats';
         log('✗ No conversations found');
         log('Make sure chat history is visible in the sidebar');
@@ -330,42 +368,53 @@
       }
 
       S.armed = true;
-      btn.textContent = `Click again to delete ${convos.length} chats`;
-      log(`✓ Found ${convos.length} conversations`);
+      btn.classList.add('gbd-armed');
+      btn.textContent = `Click again to delete ${S.convos.length} chats`;
+      log(`✓ Found ${S.convos.length} conversations`);
       log('ARMED - Click button again to start deletion');
       return;
     }
 
     if (S.armed) {
+      const targets = Array.isArray(S.convos) ? S.convos : [];
+
+      if (!confirm(`This will permanently delete ${targets.length} chats.\n\nAre you sure?`)) {
+        log('user cancelled');
+        return;
+      }
+
       S.armed = false;
+      btn.classList.remove('gbd-armed');
       S.running = true;
       showLog(true);
 
-      const convos = Array.isArray(window.__GBD_CONVOS__) ? window.__GBD_CONVOS__ : [];
       btn.disabled = true;
       log('='.repeat(50));
-      log(`Starting deletion of ${convos.length} conversations...`);
+      log(`Starting deletion of ${targets.length} conversations...`);
       log('='.repeat(50));
 
       let ok = 0, fail = 0;
+      const usedNodes = new Set();
 
-      for (let i = 0; i < convos.length; i++) {
-        const convo = convos[i];
-        btn.textContent = `Deleting ${i + 1}/${convos.length}...`;
+      for (let i = 0; i < targets.length; i++) {
+        const { key, title } = targets[i];
+        btn.textContent = `Deleting ${i + 1}/${targets.length}...`;
 
-        if (!document.contains(convo)) {
-          log(`[${i + 1}/${convos.length}] Already removed`);
-          ok++;
+        const convo = findLiveConversation(key, title, usedNodes);
+        if (!convo || !document.contains(convo)) {
+          fail++;
+          log(`[${i + 1}/${targets.length}] ✗ "${title}" - skipped: no matching live node found (already deleted, or the virtualized list recycled this row)`);
           continue;
         }
+        usedNodes.add(convo);
 
         const result = await deleteConversation(convo);
         if (result.success) {
           ok++;
-          log(`[${i + 1}/${convos.length}] ✓ "${result.title}"`);
+          log(`[${i + 1}/${targets.length}] ✓ "${result.title}"`);
         } else {
           fail++;
-          log(`[${i + 1}/${convos.length}] ✗ "${result.title}" - ${result.error || 'Unknown error'}`);
+          log(`[${i + 1}/${targets.length}] ✗ "${result.title}" - ${result.error || 'Unknown error'}`);
         }
 
         await sleep(400);
@@ -376,12 +425,16 @@
       }
 
       log('='.repeat(50));
-      log(`COMPLETE: ${ok} deleted, ${fail} failed (${convos.length} total)`);
+      log(`COMPLETE: ${ok} deleted, ${fail} failed (${targets.length} total)`);
       log('='.repeat(50));
 
       btn.textContent = 'Delete All Chats';
       btn.disabled = false;
       S.running = false;
+
+      if (fail > 0) {
+        alert(`Bulk delete finished with ${fail} failure(s) out of ${targets.length}. Check the log panel for details.`);
+      }
 
       if (ok > 0) {
         log('Reloading page in 2 seconds...');

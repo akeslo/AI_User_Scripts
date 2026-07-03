@@ -15,26 +15,28 @@
 (function () {
   'use strict';
 
-  // single supervisor object that can remount as needed
-  window.__BD_SUP__ = window.__BD_SUP__ || {
+  // single supervisor object that can remount as needed (module-scoped, not on window
+  // so other page scripts can't read/write the delete queue)
+  const S = {
     mounted: false,
     running: false,
     armed: false,
     logStore: [],
     ensureTimer: null,
-    lastUrl: location.href
+    lastUrl: location.href,
+    ids: []
   };
-  const S = window.__BD_SUP__;
 
   // ---------- UI ----------
   GM_addStyle(`
-    #bd-btn{position:fixed;top:12px;left:12px;z-index:2147483647;padding:10px 14px;border:none;border-radius:10px;background:#6740A6;color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+    #bd-btn{position:fixed;top:12px;left:12px;z-index:2147483647;padding:10px 14px;border:none;border-radius:10px;background:#6740A6;color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35);transition:background .2s}
     #bd-btn[disabled]{opacity:.6;cursor:not-allowed}
-    #bd-log{position:fixed;bottom:12px;left:12px;width:460px;max-height:55vh;overflow:auto;border:1px solid #2e2e2e;background:#111;color:#ddd;border-radius:10px;z-index:2147483647;box-shadow:0 8px 24px rgba(0,0,0,.35);font:12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;display:none}
+    #bd-btn.bd-armed{background:#b3261e}
+    #bd-log{position:fixed;bottom:12px;left:12px;width:460px;max-width:calc(100vw - 24px);max-height:55vh;overflow:auto;border:1px solid #2e2e2e;background:#111;color:#ddd;border-radius:10px;z-index:2147483647;box-shadow:0 8px 24px rgba(0,0,0,.35);font:12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;display:none}
     #bd-log header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #2e2e2e;background:#181818;border-top-left-radius:10px;border-top-right-radius:10px}
     #bd-log header b{font-size:12px}
     #bd-log header button{background:#333;border:1px solid #444;color:#eee;border-radius:6px;padding:4px 8px;cursor:pointer}
-    #bd-log pre{white-space:pre-wrap;margin:0;padding:10px;line-height:1.35}
+    #bd-log pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:10px;line-height:1.35}
   `);
 
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -50,6 +52,7 @@
     if (el) el.style.display = show ? 'block' : 'none';
   }
 
+  // NOTE: log must stay textContent, never innerHTML, to avoid stored XSS from API response bodies
   function log(...a){
     const line = a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ');
     S.logStore.push(line);
@@ -72,7 +75,7 @@
     return null;
   }
 
-  async function http(method, url, body, bearer){
+  async function http(method, url, body, bearer, allow404){
     const csrfCookie = getCookie('csrfToken');
     const csrf = csrfCookie ? decodeURIComponent(csrfCookie) : '';
     const did  = getCookie('oai-did') || '';
@@ -91,7 +94,7 @@
     try{
       const res = await fetch(url, opts);
       const text = await res.text().catch(()=> '');
-      const ok = res.ok || res.status === 204 || res.status === 404;
+      const ok = res.ok || res.status === 204 || (allow404 && res.status === 404);
       return { ok, status: res.status, text, url };
     }catch(e){
       return { ok:false, status:0, text:String(e), url };
@@ -132,12 +135,15 @@
     first.ids.forEach(id => all.add(id));
     log(`found ${all.size} on first page total ${first.total || all.size}`);
 
+    let pageCount = 0;
     while (first.hasMore && all.size < (first.total || 999999)){
       offset += page;
       const next = await listPage(offset, page, bearer);
       next.ids.forEach(id => all.add(id));
       log(`page offset ${offset} added ${next.ids.length}`);
       if (!next.hasMore || next.ids.length === 0) break;
+      pageCount++;
+      if (pageCount > 200){ log('safety stop at 200 pages'); break; }
       await sleep(120);
     }
     return Array.from(all);
@@ -161,7 +167,7 @@
       if (r.ok) return true;
     }
     for (const u of urls){
-      const r = await http('DELETE', u, undefined, bearer);
+      const r = await http('DELETE', u, undefined, bearer, true);
       log(r.ok ? `hard ok ${id} ${r.status}` : `hard fail ${id} ${r.status} ${u}`);
       if (r.ok) return true;
     }
@@ -207,6 +213,8 @@
       btn = document.createElement('button');
       btn.id = 'bd-btn';
       btn.textContent = 'Delete All Chats';
+      btn.setAttribute('role', 'status');
+      btn.setAttribute('aria-live', 'polite');
       btn.addEventListener('click', onButtonClick, { passive: true });
       document.body.appendChild(btn);
     }
@@ -223,7 +231,7 @@
             <button id="bd-clear">Clear</button>
           </div>
         </header>
-        <pre id="bd-pre"></pre>
+        <pre id="bd-pre" role="log" aria-live="polite"></pre>
       `;
       document.body.appendChild(box);
     }
@@ -262,7 +270,11 @@
     history.pushState = function(...args){ const r = origPush.apply(this, args); onChange(); return r; };
     history.replaceState = function(...args){ const r = origReplace.apply(this, args); onChange(); return r; };
     window.addEventListener('popstate', onChange);
-    new MutationObserver(() => ensureUI()).observe(document.documentElement, { childList: true, subtree: true });
+    let debounceTimer = null;
+    new MutationObserver(() => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(ensureUI, 200);
+    }).observe(document.documentElement, { childList: true, subtree: true });
   }
 
   // rescue hotkey: Ctrl Alt D remounts, Shift L D toggles log
@@ -288,29 +300,38 @@
       const bearer = await getBearer();
       btn.textContent = 'Scanning...';
       const ids = await listAllIds(bearer);
-      window.__BD_IDS__ = ids;
+      S.ids = ids;
       btn.disabled = false;
       S.running = false;
       showLog(false);
 
       if (!ids.length){
         btn.textContent = 'Delete All Chats';
+        btn.classList.remove('bd-armed');
         log('no ids found');
         return;
       }
       S.armed = true;
       btn.textContent = `Click again to delete ${ids.length} chats`;
+      btn.classList.add('bd-armed');
       log(`armed with ${ids.length} ids`);
       return;
     }
 
     // second click executes
     if (S.armed){
+      const ids = Array.isArray(S.ids) ? S.ids : [];
+
+      if (!confirm(`This will permanently delete ${ids.length} chats.\n\nAre you sure?`)){
+        log('user cancelled');
+        return;
+      }
+
       S.armed = false;
+      btn.classList.remove('bd-armed');
       S.running = true;
       showLog(true);
       const bearer = await getBearer();
-      const ids = Array.isArray(window.__BD_IDS__) ? window.__BD_IDS__ : [];
       btn.disabled = true;
 
       let ok = 0, fail = 0;
@@ -326,8 +347,12 @@
       btn.textContent = 'Delete All Chats';
       btn.disabled = false;
       S.running = false;
-      showLog(false);
-      if (ok > 0) setTimeout(() => location.replace('https://chatgpt.com/?new'), 1200);
+      if (fail > 0){
+        alert(`Bulk delete finished with ${fail} failure(s) out of ${ids.length}. Check the log panel for details.`);
+      } else {
+        showLog(false);
+      }
+      if (ok > 0) setTimeout(() => location.replace('https://chatgpt.com/?new'), 2500);
     }
   }
 
