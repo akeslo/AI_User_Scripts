@@ -45,6 +45,12 @@
     }
   `);
 
+  // DUPLICATED HELPERS (sleep/get/showLog/log): near-identical copies also live in
+  // "Claude Bulk Deleter.user.js" (~L48-64) and "ChatGPT Bulk Deleter.user.js" (~L42-58).
+  // This repo has no build system (see CLAUDE.md: "No build/package manager"), so these
+  // three copies are kept in sync by hand. If you edit this block, mirror the change in
+  // both other files. In particular, the XSS-safety invariant on log() below (textContent
+  // only, never innerHTML) MUST hold in all three copies.
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const get = sel => document.querySelector(sel);
   const getAll = sel => document.querySelectorAll(sel);
@@ -55,6 +61,7 @@
   }
 
   // NOTE: log must stay textContent, never innerHTML, to avoid stored XSS from API response bodies
+  // (this invariant must also hold in the Claude and ChatGPT copies of this function)
   function log(...a) {
     const timestamp = new Date().toLocaleTimeString();
     const line = `[${timestamp}] ` + a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ');

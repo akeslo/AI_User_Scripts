@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Claude Bulk Deleter (with Claude Code support)
 // @namespace    http://tampermonkey.net/
-// @version      1.7
-// @description  Bulk delete Claude.ai chats. Auto detects org id, paginates, keeps log visible on error, skips starred chats, auto-deletes archived Claude Code sessions, confirms active Claude Code sessions one by one. Collapsible bottom-right pull tab with progress-bar fill.
+// @version      1.8
+// @description  Bulk delete Claude.ai chats. Auto detects org id, paginates, keeps log visible on error, skips starred legacy chats, auto-queues web chats (cowork-remote sessions), confirms real Claude Code sessions one by one. Collapsible bottom-right pull tab with progress-bar fill.
 // @author       akeslo
 // @match        https://claude.ai/*
 // @grant        GM_addStyle
@@ -45,6 +45,12 @@
     #bd-log pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:10px;line-height:1.35}
   `);
 
+  // DUPLICATED HELPERS (sleep/get/showLog/log): near-identical copies also live in
+  // "Gemini Bulk Deleter.user.js" (~L48-64) and "ChatGPT Bulk Deleter.user.js" (~L42-58).
+  // This repo has no build system (see CLAUDE.md: "No build/package manager"), so these
+  // three copies are kept in sync by hand. If you edit this block, mirror the change in
+  // both other files. In particular, the XSS-safety invariant on log() below (textContent
+  // only, never innerHTML) MUST hold in all three copies.
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const get = sel => document.querySelector(sel);
   const apiBase = () => `${location.origin}/api/organizations/${orgId}`;
@@ -55,6 +61,7 @@
   }
 
   // NOTE: log must stay textContent, never innerHTML, to avoid stored XSS from API response bodies
+  // (this invariant must also hold in the Gemini and ChatGPT copies of this function)
   function log(...a) {
     const line = a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ');
     S.logStore.push(`[${new Date().toLocaleTimeString()}] ${line}`);
@@ -195,37 +202,61 @@
     return all.map(c => ({ ...c, _kind: 'chat', _id: c.uuid, _title: c.name || '(no title)' }));
   }
 
-  // Claude Code sessions live at a completely separate endpoint from chat_conversations,
-  // with ids like cse_..., and a real status field: active / paused / archived.
+  // As of 2026-07, claude.ai serves BOTH ordinary web chats and Claude Code sessions from
+  // /v1/code/sessions (ids like cse_..., routed at /cowork/<id>). The legacy
+  // chat_conversations table only holds a few stragglers. Two traps here:
+  //
+  //   1. Without exclude_tags=- the endpoint silently applies a default tag filter that
+  //      drops every web chat. That filter is why a plain ?limit=200 only ever returned
+  //      the Claude Code sessions.
+  //   2. status is 'active' for essentially everything now, so it cannot be used to tell
+  //      a finished chat from a live agent session. status_bucket (working / review_ready /
+  //      blocked) is the live field, and tags are what actually separate the two kinds.
+  //
+  // Web chats carry the 'cowork-remote' tag (environment_kind anthropic_cloud). Real Claude
+  // Code sessions carry remote-control-* / cowork-local tags and run on environment_kind
+  // 'bridge'. Note cse_ sessions have no starred/pinned field at all - star-skipping only
+  // works on legacy chat_conversations.
+  //
   // Max limit is 200 and the endpoint doesn't support real backward pagination
   // (resume_token is for forward/incremental sync, not paging older items), so this
   // is best-effort: it grabs the most recent 200 and says so if there may be more.
-  async function fetchAllCodeSessions() {
+  const WEB_CHAT_TAG = 'cowork-remote';
+
+  function isWebChatSession(s) {
+    const tags = Array.isArray(s.tags) ? s.tags : [];
+    return tags.includes(WEB_CHAT_TAG);
+  }
+
+  async function fetchAllSessions() {
     try {
-      const resp = await fetch(`${location.origin}/v1/code/sessions?limit=200`, {
+      const resp = await fetch(`${location.origin}/v1/code/sessions?limit=200&exclude_tags=-`, {
         credentials: 'include',
         cache: 'no-store',
         headers: commonHeaders()
       });
       if (!resp.ok) {
-        log(`fetch code sessions failed status ${resp.status}`);
+        log(`fetch sessions failed status ${resp.status}`);
         return [];
       }
       const data = await resp.json();
       const arr = Array.isArray(data.data) ? data.data : [];
-      log(`fetched ${arr.length} Claude Code sessions`);
+      log(`fetched ${arr.length} sessions (chats + Claude Code)`);
       if (arr.length >= 200) {
-        log('note: 200-session cap hit, older Claude Code sessions may exist but the API has no reliable way to page past this. Not deleted this pass.');
+        log('note: 200-session cap hit, older sessions may exist but the API has no reliable way to page past this. Not deleted this pass.');
       }
-      return arr.map(s => ({
-        ...s,
-        _kind: 'code',
-        _id: s.id,
-        _title: s.title || '(no title)',
-        _archived: s.status === 'archived'
-      }));
+      return arr.map(s => {
+        const web = isWebChatSession(s);
+        return {
+          ...s,
+          _kind: 'code', // delete route is /v1/code/sessions/<id> for both
+          _id: s.id,
+          _title: s.title || '(no title)',
+          _webChat: web
+        };
+      });
     } catch (e) {
-      log(`fetch code sessions error ${String(e)}`);
+      log(`fetch sessions error ${String(e)}`);
       return [];
     }
   }
@@ -389,15 +420,15 @@
         return;
       }
 
-      const [allChats, allCodeSessions] = await Promise.all([
+      const [legacyChats, allSessions] = await Promise.all([
         fetchAllChats(),
-        fetchAllCodeSessions()
+        fetchAllSessions()
       ]);
 
       const normalChats = [];
       let starredCount = 0;
 
-      allChats.forEach(c => {
+      legacyChats.forEach(c => {
         if (c.is_starred) {
           starredCount++;
         } else {
@@ -405,24 +436,25 @@
         }
       });
 
-      const archivedCodeSessions = allCodeSessions.filter(s => s._archived);
-      const activeCodeSessions = allCodeSessions.filter(s => !s._archived);
+      // Web chats are ordinary conversations - bulk-queue them, same as legacy chats.
+      // Real Claude Code sessions are live agent runs, so they stay behind a per-item confirm.
+      const webChats = allSessions.filter(s => s._webChat);
+      const codeSessions = allSessions.filter(s => !s._webChat);
 
-      S.chats = normalChats.concat(archivedCodeSessions);
+      S.chats = normalChats.concat(webChats);
 
-      log(`Found ${archivedCodeSessions.length} archived Claude Code sessions (auto-queued).`);
+      log(`Found ${normalChats.length} legacy chats and ${webChats.length} web chats (auto-queued).`);
 
-      // Active/paused Claude Code sessions get confirmed one by one, never bulk-added.
-      if (activeCodeSessions.length > 0) {
-        log(`Found ${activeCodeSessions.length} active/paused Claude Code sessions.`);
+      if (codeSessions.length > 0) {
+        log(`Found ${codeSessions.length} Claude Code sessions.`);
         let added = 0;
-        for (const s of activeCodeSessions) {
-          if (confirm(`Delete active Claude Code session:\n"${s._title}"\nstatus: ${s.status}?`)) {
+        for (const s of codeSessions) {
+          if (confirm(`Delete Claude Code session:\n"${s._title}"\nstatus: ${s.status_bucket || s.status}?`)) {
             S.chats.push(s);
             added++;
           }
         }
-        log(`Individually added ${added} active Claude Code sessions to deletion queue.`);
+        log(`Individually added ${added} Claude Code sessions to deletion queue.`);
       }
 
       // de-dupe by _id before arming, in case the same chat/session surfaced from more than one source
