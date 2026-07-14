@@ -5,7 +5,7 @@ This repository contains a collection of user scripts for bulk deleting conversa
 ## Scripts
 
 *   **Gemini Bulk Deleter.user.js**: A script to bulk delete conversations in Gemini.
-*   **Claude Bulk Deleter.user.js**: A script to bulk delete conversations in Claude.
+*   **Claude Bulk Deleter.user.js**: A script to bulk delete conversations in Claude. It distinguishes real Claude Code sessions from web chats by tag (not status) — only web chats are bulk-queued for deletion, while sessions require individual confirmation.
 *   **ChatGPT Bulk Deleter.user.js**: A script to bulk delete conversations in ChatGPT.
 
 ## Installation
