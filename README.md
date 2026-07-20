@@ -20,6 +20,22 @@ To use these scripts, you need to have a user script manager like [Violentmonkey
 
 Once installed, the scripts will add a "Bulk Delete" button to the respective web interface. Click the button to start deleting conversations.
 
+## API request tests
+
+`ChatGPT Bulk Deleter.user.js` and `Claude Bulk Deleter.user.js` drive their
+sites via REST APIs (`/backend-api/conversations` and `/v1/code/sessions`
+respectively). `tests/` contains vitest integration tests that extract each
+script's request-building functions, run them against a mocked `fetch`, and
+assert the resulting requests (URL, method, headers, body) match what each
+API expects — including graceful failure when the API responds with an
+error status or an unexpected/malformed body. These run fast, need no
+browser or login, and are safe to run in CI:
+
+```sh
+npm install
+npm test
+```
+
 ## Selector-drift smoke check
 
 `check-selectors.js` is a manual, on-demand tool that opens each site in a

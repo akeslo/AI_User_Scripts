@@ -4,9 +4,11 @@
   "private": true,
   "description": "Tampermonkey userscripts for bulk-deleting chats on claude.ai / gemini.google.com / chatgpt.com, plus a manual selector-drift smoke check.",
   "scripts": {
-    "check-selectors": "node check-selectors.js"
+    "check-selectors": "node check-selectors.js",
+    "test": "vitest run"
   },
   "devDependencies": {
-    "playwright": "^1.48.0"
+    "playwright": "^1.48.0",
+    "vitest": "^2.1.9"
   }
 }

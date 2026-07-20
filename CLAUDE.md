@@ -11,11 +11,17 @@
 
 ## Tech Stack
 
-Tampermonkey userscripts (vanilla JS, `@grant GM_addStyle` etc). No build step for the userscripts themselves. `package.json` exists only for the Playwright-based `check-selectors.js` smoke check (devDependency: `playwright`).
+Tampermonkey userscripts (vanilla JS, `@grant GM_addStyle` etc). No build step for the userscripts themselves. `package.json` carries two devDependencies: `playwright` (for `check-selectors.js`) and `vitest` (for `tests/`).
 
 ## Commands
 
 No build step for the userscripts. Install via Tampermonkey (paste/import the `.user.js` file).
+
+API request tests (fast, no browser/login needed, safe for CI):
+```sh
+npm install
+npm test
+```
 
 Selector-drift smoke check (manual, not run in CI — needs a logged-in browser session per site):
 ```sh
@@ -30,6 +36,7 @@ node check-selectors.js
 - `Gemini Bulk Deleter.user.js` — bulk-deletes gemini.google.com conversations via DOM automation (`gem-nav-list-item` menu clicks); selectors track Gemini's UI markup and break on redesigns.
 - `ChatGPT Bulk Deleter.user.js` — same API-driven pattern as Claude's script, for chatgpt.com.
 - `check-selectors.js` — manual Playwright smoke check: opens each site in a real logged-in browser and asserts the Gemini script's CSS selectors still resolve. Informational-only for the ChatGPT/Claude scripts (no selector surface — they hit REST APIs directly).
+- `tests/` — vitest integration tests for the Claude and ChatGPT scripts' API request-building logic (`tests/helpers/loadClaudeApi.js` and `loadChatGptApi.js` extract those functions from the `.user.js` source via text markers and run them against a mocked `fetch`). No test coverage for Gemini (DOM-driven, covered by `check-selectors.js` instead).
 
 ## Conventions
 
