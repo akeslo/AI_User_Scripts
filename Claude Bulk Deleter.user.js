@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Claude Bulk Deleter (with Claude Code support)
 // @namespace    http://tampermonkey.net/
-// @version      1.8
-// @description  Bulk delete Claude.ai chats. Auto detects org id, paginates, keeps log visible on error, skips starred legacy chats, auto-queues web chats (cowork-remote sessions), confirms real Claude Code sessions one by one. Collapsible bottom-right pull tab with progress-bar fill.
+// @version      2.1
+// @description  Bulk delete Claude.ai chats and artifacts. Auto detects org id, paginates, keeps log visible on error, skips starred legacy chats, auto-queues web chats (cowork-remote sessions), confirms real Claude Code sessions and artifacts one by one. Collapsible bottom-right pull tab with progress-bar fill.
 // @author       akeslo
 // @match        https://claude.ai/*
 // @grant        GM_addStyle
@@ -68,6 +68,16 @@
     const pre = get('#bd-pre');
     if (pre) pre.textContent = S.logStore.join('\n');
     console.log('[ClaudeBulkDeleter]', ...a);
+  }
+
+  // "12 chats + 3 artifacts" - the queue is mixed, so don't label artifacts as chats
+  function describeQueue(items) {
+    const artifacts = items.filter(i => i._kind === 'artifact' || i._kind === 'frame').length;
+    const chats = items.length - artifacts;
+    const parts = [];
+    if (chats) parts.push(`${chats} chat${chats === 1 ? '' : 's'}`);
+    if (artifacts) parts.push(`${artifacts} artifact${artifacts === 1 ? '' : 's'}`);
+    return parts.join(' + ') || '0 chats';
   }
 
   function setBtn(text, pct) {
@@ -261,15 +271,132 @@
     }
   }
 
+  // ARTIFACTS. claude.ai has THREE things called "artifacts", on different APIs:
+  //
+  //   1. Frames        - the cards on /code/artifacts. This is what the sidebar "Artifacts" link
+  //                      shows and what most people mean. GET /api/frame/frames?limit&org,
+  //                      keyed by `slug`. Delete: DELETE /api/frame/<slug>?org=<org>
+  //                      (note: NOT /api/frame/frames/<slug> - that 404s).
+  //   2. Published     - public claude.site share links.
+  //                      GET/DELETE /api/organizations/<org>/published_artifacts/<uuid>
+  //   3. Library items - the read-only /artifacts list (user_artifacts). These are the artifacts
+  //                      embedded in chats. There is NO delete route for them (DELETE 404s, and
+  //                      artifact-versions is GET-only); they go away with their parent chat.
+  //
+  // Routes 1 and 2 were captured from claude.ai's own UI / probed live on 2026-07-13.
+  //
+  // GOTCHA: the /api/frame/* endpoints REQUIRE the header `x-frame-cp: go`. Without it - or with
+  // any other value - they answer 404 with the same generic "Not found" body a nonexistent route
+  // returns, so a missing header is indistinguishable from a missing endpoint. Don't drop it.
+  function frameHeaders() {
+    return commonHeaders({
+      'x-frame-cp': 'go',
+      'x-frame-surface': 'code',
+      'x-frame-platform': 'web'
+    });
+  }
+
+  async function fetchFrames() {
+    if (!orgId) return [];
+    try {
+      const resp = await fetch(`${location.origin}/api/frame/frames?limit=100&org=${encodeURIComponent(orgId)}`, {
+        credentials: 'include',
+        cache: 'no-store',
+        headers: frameHeaders()
+      });
+      if (!resp.ok) {
+        log(`fetch artifacts (frames) failed status ${resp.status}`);
+        return [];
+      }
+      const data = await resp.json();
+      const arr = Array.isArray(data.frames) ? data.frames : [];
+      if (arr.length >= 100) log('note: 100-artifact cap hit, older artifacts may exist.');
+      const out = [];
+      for (const f of arr) {
+        if (!f || !f.slug) continue;
+        out.push({
+          ...f,
+          _kind: 'frame',
+          _id: f.slug,
+          _title: f.title || '(untitled artifact)'
+        });
+      }
+      log(`fetched ${out.length} artifacts`);
+      return out;
+    } catch (e) {
+      log(`fetch artifacts error ${String(e)}`);
+      return [];
+    }
+  }
+
+  async function fetchPublishedArtifacts() {
+    if (!orgId) return [];
+    try {
+      const resp = await fetch(`${apiBase()}/published_artifacts?include_deleted_artifacts=false`, {
+        credentials: 'include',
+        cache: 'no-store',
+        headers: commonHeaders()
+      });
+      if (!resp.ok) {
+        log(`fetch published artifacts failed status ${resp.status}`);
+        return [];
+      }
+      const data = await resp.json();
+      const arr = Array.isArray(data) ? data : (Array.isArray(data.published_artifacts) ? data.published_artifacts : []);
+      const out = [];
+      for (const a of arr) {
+        if (!a) continue;
+        if (a.deleted_at || a.published_artifact_deleted_at) continue; // already unpublished
+        const id = a.published_artifact_uuid || a.uuid || a.id;
+        if (!id) {
+          log(`skipping published artifact with no uuid, keys: ${Object.keys(a).join(',')}`);
+          continue;
+        }
+        out.push({
+          ...a,
+          _kind: 'artifact',
+          _id: id,
+          _title: a.title || a.name || '(untitled artifact)'
+        });
+      }
+      log(`fetched ${out.length} published artifacts`);
+      return out;
+    } catch (e) {
+      log(`fetch published artifacts error ${String(e)}`);
+      return [];
+    }
+  }
+
+  // Informational only - these cannot be deleted on their own, they go with their chat.
+  async function logLibraryArtifactCount() {
+    if (!orgId) return;
+    try {
+      const resp = await fetch(`${apiBase()}/user_artifacts/count`, {
+        credentials: 'include',
+        cache: 'no-store',
+        headers: commonHeaders()
+      });
+      if (!resp.ok) return;
+      const j = await resp.json();
+      if (j && typeof j.count === 'number' && j.count > 0) {
+        log(`note: ${j.count} artifacts in your library. The API has no delete route for these - they are removed with the chat that created them.`);
+      }
+    } catch {}
+  }
+
   async function deleteChat(chat) {
     const url = chat._kind === 'code'
       ? `${location.origin}/v1/code/sessions/${chat._id}`
-      : `${apiBase()}/chat_conversations/${chat._id}`;
+      : chat._kind === 'frame'
+        ? `${location.origin}/api/frame/${chat._id}?org=${encodeURIComponent(orgId)}`
+        : chat._kind === 'artifact'
+          ? `${apiBase()}/published_artifacts/${chat._id}`
+          : `${apiBase()}/chat_conversations/${chat._id}`;
     try {
       const res = await fetch(url, {
         method: 'DELETE',
         credentials: 'include',
-        headers: commonHeaders()
+        headers: chat._kind === 'frame' ? frameHeaders() : commonHeaders()
       });
       if (res.ok) {
         log(`ok "${chat._title}" ${chat._id}`);
@@ -420,10 +547,14 @@
         return;
       }
 
-      const [legacyChats, allSessions] = await Promise.all([
+      const [legacyChats, allSessions, frames, publishedArtifacts] = await Promise.all([
         fetchAllChats(),
-        fetchAllSessions()
+        fetchAllSessions(),
+        fetchFrames(),
+        fetchPublishedArtifacts()
       ]);
+      const artifacts = frames.concat(publishedArtifacts);
+      await logLibraryArtifactCount();
 
       const normalChats = [];
       let starredCount = 0;
@@ -457,6 +588,23 @@
         log(`Individually added ${added} Claude Code sessions to deletion queue.`);
       }
 
+      // Artifacts outlive the chats that made them and deletion is permanent, so - like real
+      // Claude Code sessions - each one is confirmed individually rather than bulk-queued.
+      if (artifacts.length > 0) {
+        log(`Found ${artifacts.length} artifacts.`);
+        let addedArtifacts = 0;
+        for (let i = 0; i < artifacts.length; i++) {
+          const a = artifacts[i];
+          const kind = a._kind === 'frame' ? 'artifact' : 'published artifact';
+          const desc = a.description ? `\n${a.description}` : '';
+          if (confirm(`Delete ${kind} ${i + 1} of ${artifacts.length}:\n"${a._title}"${desc}\n\nThis is permanent and cannot be undone.`)) {
+            S.chats.push(a);
+            addedArtifacts++;
+          }
+        }
+        log(`Individually added ${addedArtifacts} of ${artifacts.length} artifacts to deletion queue.`);
+      }
+
       // de-dupe by _id before arming, in case the same chat/session surfaced from more than one source
       {
         const seenIds = new Set();
@@ -479,8 +627,8 @@
       showLog(false);
       S.armed = true;
       btn.classList.add('bd-armed');
-      setBtn(`Click again to delete ${S.chats.length} chats`, 0);
-      log(`Armed with ${S.chats.length} chats for deletion (Skipped ${starredCount} starred chats)`);
+      setBtn(`Click again to delete ${describeQueue(S.chats)}`, 0);
+      log(`Armed with ${describeQueue(S.chats)} for deletion (Skipped ${starredCount} starred chats)`);
       return;
     }
 
@@ -500,7 +648,7 @@
         return;
       }
 
-      if (!confirm(`This will permanently delete ${chats.length} chats.\n\nAre you sure?`)) {
+      if (!confirm(`This will permanently delete ${describeQueue(chats)}.\n\nAre you sure?`)) {
         log('user cancelled');
         btn.disabled = false;
         setBtn('Delete Unstarred Chats', 0);
