@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Bulk Deleter
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      2.1
 // @description  Delete all Gemini chats with two-click arm mechanism
 // @author       akeslo
 // @match        https://gemini.google.com/*
@@ -19,6 +19,7 @@
     mounted: false,
     running: false,
     armed: false,
+    collapsed: true,
     logStore: [],
     ensureTimer: null,
     lastUrl: location.href,
@@ -26,18 +27,25 @@
   };
 
   GM_addStyle(`
-    #gbd-btn{position:fixed;top:12px;left:12px;z-index:2147483647;padding:10px 14px;border:none;border-radius:10px;background:#1a73e8;color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35);transition:background .2s}
+    #gbd-wrap{position:fixed;bottom:16px;right:0;z-index:2147483647;display:flex;align-items:stretch;transition:transform .25s ease}
+    #gbd-wrap.gbd-collapsed{transform:translateX(calc(100% - 18px))}
+    #gbd-tab{width:18px;background:#1a73e8;border-radius:8px 0 0 8px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;font-size:13px;user-select:none;flex-shrink:0;box-shadow:-4px 0 12px rgba(0,0,0,.3)}
+    #gbd-btn{position:relative;overflow:hidden;padding:10px 14px;border:none;border-radius:0 10px 10px 0;background:#1a73e8;color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35);white-space:nowrap;transition:background .2s}
     #gbd-btn:hover{background:#1765cc}
     #gbd-btn[disabled]{opacity:.6;cursor:not-allowed;background:#5f6368}
     #gbd-btn.gbd-armed{background:#c5221f}
     #gbd-btn.gbd-armed:hover{background:#a3160f}
-    #gbd-log{position:fixed;bottom:12px;left:12px;width:500px;max-width:calc(100vw - 24px);max-height:60vh;overflow:auto;border:1px solid #dadce0;background:#fff;color:#202124;border-radius:10px;z-index:2147483647;box-shadow:0 8px 24px rgba(0,0,0,.35);font:11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;display:none}
+    #gbd-btn-fill{position:absolute;left:0;top:0;bottom:0;width:100%;background:#1a73e8;transform:scaleX(0);transform-origin:left;transition:transform .2s linear;z-index:0}
+    #gbd-btn-text{position:relative;z-index:1}
+    #gbd-log{position:fixed;bottom:70px;right:12px;width:520px;max-width:calc(100vw - 24px);max-height:60vh;overflow:auto;border:1px solid #dadce0;background:#fff;color:#202124;border-radius:10px;z-index:2147483647;box-shadow:0 8px 24px rgba(0,0,0,.35);font:11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;display:none}
     #gbd-log header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #dadce0;background:#f8f9fa;border-top-left-radius:10px;border-top-right-radius:10px}
     #gbd-log header b{font-size:12px;font-weight:600}
     #gbd-log header button{background:#fff;border:1px solid #dadce0;color:#202124;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;margin-left:4px}
     #gbd-log header button:hover{background:#f8f9fa}
     #gbd-log pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:10px;line-height:1.5;font-size:11px}
     @media (prefers-color-scheme: dark) {
+      #gbd-tab{background:#5f6368}
+      #gbd-btn-fill{background:#5f6368}
       #gbd-log{background:#202124;color:#e8eaed;border-color:#5f6368}
       #gbd-log header{background:#292a2d;border-color:#5f6368}
       #gbd-log header button{background:#292a2d;border-color:#5f6368;color:#e8eaed}
@@ -72,6 +80,18 @@
       pre.scrollTop = pre.scrollHeight;
     }
     console.log('[GeminiBulkDeleter]', ...a);
+  }
+
+  function setBtn(text, pct){
+    const t = get('#gbd-btn-text');
+    const f = get('#gbd-btn-fill');
+    if (t) t.textContent = text;
+    if (f) f.style.transform = `scaleX(${(pct == null ? 0 : pct) / 100})`;
+  }
+
+  function applyCollapsed(){
+    const wrap = get('#gbd-wrap');
+    if (wrap) wrap.classList.toggle('gbd-collapsed', S.collapsed);
   }
 
   function getConversationDivs() {
@@ -214,15 +234,28 @@
   }
 
   function mountUI() {
-    let btn = get('#gbd-btn');
-    if (!btn) {
-      btn = document.createElement('button');
+    let wrap = get('#gbd-wrap');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.id = 'gbd-wrap';
+
+      const tab = document.createElement('div');
+      tab.id = 'gbd-tab';
+      tab.title = 'Show/hide bulk deleter';
+      tab.addEventListener('click', () => {
+        S.collapsed = !S.collapsed;
+        applyCollapsed();
+      }, { passive: true });
+
+      const btn = document.createElement('button');
       btn.id = 'gbd-btn';
-      btn.textContent = 'Delete All Chats';
-      btn.setAttribute('role', 'status');
-      btn.setAttribute('aria-live', 'polite');
+      btn.innerHTML = `<span id="gbd-btn-fill"></span><span id="gbd-btn-text" role="status" aria-live="polite">Delete All Chats</span>`;
       btn.addEventListener('click', onButtonClick, { passive: true });
-      document.body.appendChild(btn);
+
+      wrap.appendChild(tab);
+      wrap.appendChild(btn);
+      document.body.appendChild(wrap);
+      applyCollapsed();
     }
 
     let box = get('#gbd-log');
@@ -241,13 +274,13 @@
       const clearBtn = document.createElement('button');
       clearBtn.id = 'gbd-clear';
       clearBtn.textContent = 'Clear';
-      const closeBtn = document.createElement('button');
-      closeBtn.id = 'gbd-close';
-      closeBtn.textContent = 'Close';
+      const showBtn = document.createElement('button');
+      showBtn.id = 'gbd-show';
+      showBtn.textContent = 'Show/Hide';
 
+      btnContainer.appendChild(showBtn);
       btnContainer.appendChild(copyBtn);
       btnContainer.appendChild(clearBtn);
-      btnContainer.appendChild(closeBtn);
       header.appendChild(title);
       header.appendChild(btnContainer);
 
@@ -263,7 +296,7 @@
 
     const clearBtn = get('#gbd-clear');
     const copyBtn = get('#gbd-copy');
-    const closeBtn = get('#gbd-close');
+    const showBtn = get('#gbd-show');
 
     if (clearBtn && !clearBtn.__gbdHooked) {
       clearBtn.__gbdHooked = true;
@@ -282,9 +315,12 @@
       };
     }
 
-    if (closeBtn && !closeBtn.__gbdHooked) {
-      closeBtn.__gbdHooked = true;
-      closeBtn.onclick = () => showLog(false);
+    if (showBtn && !showBtn.__gbdHooked) {
+      showBtn.__gbdHooked = true;
+      showBtn.onclick = () => {
+        const el = get('#gbd-log');
+        if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+      };
     }
 
     S.mounted = true;

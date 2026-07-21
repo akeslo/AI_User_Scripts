@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Bulk Deleter
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      2.1
 // @description  Delete all chats with visible log that shows while running and hides when done. Auto remounts UI on changes.
 // @author       akeslo
 // @match        https://chatgpt.com/*
@@ -21,6 +21,7 @@
     mounted: false,
     running: false,
     armed: false,
+    collapsed: true,
     logStore: [],
     ensureTimer: null,
     lastUrl: location.href,
@@ -29,13 +30,18 @@
 
   // ---------- UI ----------
   GM_addStyle(`
-    #bd-btn{position:fixed;top:12px;left:12px;z-index:2147483647;padding:10px 14px;border:none;border-radius:10px;background:#6740A6;color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35);transition:background .2s}
+    #bd-wrap{position:fixed;bottom:16px;right:0;z-index:2147483647;display:flex;align-items:stretch;transition:transform .25s ease}
+    #bd-wrap.bd-collapsed{transform:translateX(calc(100% - 18px))}
+    #bd-tab{width:18px;background:#9333EA;border-radius:8px 0 0 8px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;font-size:13px;user-select:none;flex-shrink:0;box-shadow:-4px 0 12px rgba(0,0,0,.3)}
+    #bd-btn{position:relative;overflow:hidden;padding:10px 14px;border:none;border-radius:0 10px 10px 0;background:#6740A6;color:#fff;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35);white-space:nowrap;transition:background .2s}
     #bd-btn[disabled]{opacity:.6;cursor:not-allowed}
     #bd-btn.bd-armed{background:#b3261e}
-    #bd-log{position:fixed;bottom:12px;left:12px;width:460px;max-width:calc(100vw - 24px);max-height:55vh;overflow:auto;border:1px solid #2e2e2e;background:#111;color:#ddd;border-radius:10px;z-index:2147483647;box-shadow:0 8px 24px rgba(0,0,0,.35);font:12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;display:none}
+    #bd-btn-fill{position:absolute;left:0;top:0;bottom:0;width:100%;background:#9333EA;transform:scaleX(0);transform-origin:left;transition:transform .2s linear;z-index:0}
+    #bd-btn-text{position:relative;z-index:1}
+    #bd-log{position:fixed;bottom:70px;right:12px;width:520px;max-width:calc(100vw - 24px);max-height:55vh;overflow:auto;border:1px solid #2e2e2e;background:#111;color:#ddd;border-radius:10px;z-index:2147483647;box-shadow:0 8px 24px rgba(0,0,0,.35);font:12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;display:none}
     #bd-log header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #2e2e2e;background:#181818;border-top-left-radius:10px;border-top-right-radius:10px}
     #bd-log header b{font-size:12px}
-    #bd-log header button{background:#333;border:1px solid #444;color:#eee;border-radius:6px;padding:4px 8px;cursor:pointer}
+    #bd-log header button{background:#333;border:1px solid #444;color:#eee;border-radius:6px;padding:4px 8px;cursor:pointer;margin-left:4px}
     #bd-log pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:10px;line-height:1.35}
   `);
 
@@ -66,6 +72,18 @@
     const pre = get('#bd-pre');
     if (pre) pre.textContent = S.logStore.join('\n');
     console.log('[BulkDeleter]', ...a);
+  }
+
+  function setBtn(text, pct){
+    const t = get('#bd-btn-text');
+    const f = get('#bd-btn-fill');
+    if (t) t.textContent = text;
+    if (f) f.style.transform = `scaleX(${(pct == null ? 0 : pct) / 100})`;
+  }
+
+  function applyCollapsed(){
+    const wrap = get('#bd-wrap');
+    if (wrap) wrap.classList.toggle('bd-collapsed', S.collapsed);
   }
 
   async function getBearer(){
@@ -214,18 +232,31 @@
 
   // ---------- Mount and resilience ----------
   function mountUI(){
-    // create or refresh button
-    let btn = get('#bd-btn');
-    if (!btn){
-      btn = document.createElement('button');
+    // create or refresh wrapper and button
+    let wrap = get('#bd-wrap');
+    if (!wrap){
+      wrap = document.createElement('div');
+      wrap.id = 'bd-wrap';
+
+      const tab = document.createElement('div');
+      tab.id = 'bd-tab';
+      tab.title = 'Show/hide bulk deleter';
+      tab.addEventListener('click', () => {
+        S.collapsed = !S.collapsed;
+        applyCollapsed();
+      }, { passive: true });
+
+      const btn = document.createElement('button');
       btn.id = 'bd-btn';
-      btn.textContent = 'Delete All Chats';
-      btn.setAttribute('role', 'status');
-      btn.setAttribute('aria-live', 'polite');
+      btn.innerHTML = `<span id="bd-btn-fill"></span><span id="bd-btn-text" role="status" aria-live="polite">Delete All Chats</span>`;
       btn.addEventListener('click', onButtonClick, { passive: true });
-      document.body.appendChild(btn);
+
+      wrap.appendChild(tab);
+      wrap.appendChild(btn);
+      document.body.appendChild(wrap);
+      applyCollapsed();
     }
-    // create or refresh log
+
     let box = get('#bd-log');
     if (!box){
       box = document.createElement('div');
@@ -234,6 +265,7 @@
         <header>
           <b>Bulk Deleter Log</b>
           <div>
+            <button id="bd-show">Show/Hide</button>
             <button id="bd-copy">Copy</button>
             <button id="bd-clear">Clear</button>
           </div>
@@ -242,7 +274,7 @@
       `;
       document.body.appendChild(box);
     }
-    // hook actions
+
     const clearBtn = get('#bd-clear');
     const copyBtn  = get('#bd-copy');
     if (clearBtn && !clearBtn.__bdHooked){
