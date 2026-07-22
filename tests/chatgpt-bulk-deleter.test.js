@@ -6,6 +6,61 @@ function textResponse(body, ok = true, status = 200) {
   return { ok, status, text: async () => text, json: async () => JSON.parse(text) };
 }
 
+describe('ChatGPT Bulk Deleter — /api/auth/session (auth token fetch)', () => {
+  it('fetches bearer token from /api/auth/session with correct credentials', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      textResponse({ accessToken: 'test-bearer-token-abc123' })
+    );
+    const logMock = vi.fn();
+    const api = loadChatGptApi({ fetch: fetchMock, log: logMock });
+
+    const token = await api.getBearer();
+
+    expect(token).toBe('test-bearer-token-abc123');
+    expect(logMock).toHaveBeenCalledWith('token ok');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://chatgpt.com/api/auth/session');
+    expect(opts.credentials).toBe('include');
+    expect(opts.cache).toBe('no-store');
+  });
+
+  it('returns null and logs when auth endpoint fails with non-ok status', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(textResponse({}, false, 401));
+    const logMock = vi.fn();
+    const api = loadChatGptApi({ fetch: fetchMock, log: logMock });
+
+    const token = await api.getBearer();
+
+    expect(token).toBeNull();
+    expect(logMock).toHaveBeenCalledWith('no bearer (auth failed)');
+  });
+
+  it('returns null and logs when response lacks accessToken field', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      textResponse({ someOtherField: 'value' })
+    );
+    const logMock = vi.fn();
+    const api = loadChatGptApi({ fetch: fetchMock, log: logMock });
+
+    const token = await api.getBearer();
+
+    expect(token).toBeNull();
+    expect(logMock).toHaveBeenCalledWith('no bearer');
+  });
+
+  it('returns null and logs when fetch request throws', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error('Network error'));
+    const logMock = vi.fn();
+    const api = loadChatGptApi({ fetch: fetchMock, log: logMock });
+
+    const token = await api.getBearer();
+
+    expect(token).toBeNull();
+    expect(logMock).toHaveBeenCalledWith('no bearer');
+  });
+});
+
 describe('ChatGPT Bulk Deleter — /backend-api/conversations (GET, paginated list)', () => {
   it('requests the conversations page with the exact URL and bearer header', async () => {
     const fetchMock = vi.fn().mockResolvedValue(

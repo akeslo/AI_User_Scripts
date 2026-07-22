@@ -67,7 +67,8 @@
   // NOTE: log must stay textContent, never innerHTML, to avoid stored XSS from API response bodies
   // (this invariant must also hold in the Claude and Gemini copies of this function)
   function log(...a){
-    const line = a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ');
+    const timestamp = new Date().toLocaleTimeString();
+    const line = `[${timestamp}] ` + a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ');
     S.logStore.push(line);
     const pre = get('#bd-pre');
     if (pre) pre.textContent = S.logStore.join('\n');
@@ -89,7 +90,10 @@
   async function getBearer(){
     try{
       const res = await fetch(`${base()}/api/auth/session`, { credentials:'include', cache:'no-store' });
-      if (!res.ok) return null;
+      if (!res.ok){
+        log('no bearer (auth failed)');
+        return null;
+      }
       const j = await res.json();
       if (j && j.accessToken){
         log('token ok');
