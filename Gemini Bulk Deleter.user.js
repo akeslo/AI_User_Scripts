@@ -95,7 +95,15 @@
   }
 
   function getConversationDivs() {
-    return Array.from(getAll('gem-nav-list-item[data-test-id="conversation"]'));
+    const divs = Array.from(getAll('gem-nav-list-item[data-test-id="conversation"]'));
+    // If no conversations found, check if the selector itself is broken (UI changed)
+    if (divs.length === 0) {
+      const sampleNav = get('gem-nav-list-item');
+      if (!sampleNav) {
+        log('⚠ WARNING: Gemini UI selector "gem-nav-list-item" not found. UI may have changed.');
+      }
+    }
+    return divs;
   }
 
   function extractTitle(convoDiv) {

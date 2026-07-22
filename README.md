@@ -47,6 +47,13 @@ Deleter.user.js" drive their sites via REST API calls rather than DOM
 selectors, so the check is informational-only for those two — see the file
 header comment for details.)
 
+**Why this matters**: If Gemini's UI changes and the selectors no longer match,
+the bulk deleter will fail silently when scanning for conversations. If a
+selector fails during deletion (e.g., menu button selector breaks), the script
+logs a clear error message; but if the conversation list selector breaks, you
+may see "No conversations found" with no indication that the selector itself
+has changed.
+
 It requires a logged-in browser session for each site and is **not** run in
 CI. Run it by hand, either periodically or right after the bulk deleter seems
 to have broken:
@@ -54,9 +61,15 @@ to have broken:
 ```sh
 npm install
 npx playwright install chromium   # one-time browser binary install
-node check-selectors.js
+npm run check-selectors
 ```
 
 The first run opens a visible Chromium window; log in to each site by hand.
 The session is cached in `.playwright-profile/` (gitignored) for next time.
 Full details are in the comment header of `check-selectors.js`.
+
+**Manual validation**: If the script doesn't detect conversations (shows "No
+conversations found"), first ensure the chat history is visible in the sidebar.
+If it still doesn't work, run `check-selectors.js` to verify the selectors
+still match the current Gemini UI — if not, the tool may need updates to match
+UI changes.
