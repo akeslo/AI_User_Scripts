@@ -196,3 +196,25 @@ describe('script invariants', () => {
     expect(mcasCode).not.toMatch(/location\.reload\(/);
   });
 });
+
+describe('grace period vs observed real-world boot times', () => {
+  // A healthy Outlook tab behind the mcas.ms proxy was measured with 0 chars of
+  // body text ~30s after a reload, and a rendered shell by ~40s -- while also
+  // carrying stale interaction_required/failed_to_redirect telemetry from an
+  // earlier session. Both halves of the stuck test were momentarily true on a
+  // tab that was fine. The grace period is the only thing separating them.
+  it('does not act on a healthy-but-slow shell at 30s or 40s', () => {
+    const healthyButSlow = {
+      bodyTextLen: 0,
+      hasSpinner: false,
+      signals: ['interaction_required', 'failed_to_redirect'],
+    };
+    expect(isStuck({ ...healthyButSlow, elapsedMs: 30_000 }, CFG).stuck).toBe(false);
+    expect(isStuck({ ...healthyButSlow, elapsedMs: 40_000 }, CFG).stuck).toBe(false);
+    expect(isStuck({ ...healthyButSlow, elapsedMs: 45_000 }, CFG).stuck).toBe(false);
+  });
+
+  it('keeps the grace period at least 50% clear of the observed 40s render', () => {
+    expect(CFG.graceMs).toBeGreaterThanOrEqual(60_000);
+  });
+});

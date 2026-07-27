@@ -65,9 +65,13 @@
 
   const CFG = {
     // How long the page must have been up before a dead shell counts as stuck.
-    // Teams cold-boots in ~2-4s on a good link; 30s is well past any legitimate
-    // slow load and still far below a human's patience threshold.
-    graceMs: 30_000,
+    // Measured, not guessed: a *healthy* Outlook tab behind this proxy was still
+    // reporting 0 characters of body text ~30s after a reload, and only had a
+    // rendered shell by ~40s. A 30s grace would therefore have judged a working
+    // tab as dead. 60s sits well clear of that observed worst case; the cost is
+    // an extra half-minute in the genuinely-stuck case, where the user has
+    // usually been staring at the spinner for far longer already.
+    graceMs: 60_000,
     // Re-check on this interval until we either act or the app renders.
     pollMs: 5_000,
     // Above this much rendered text, the app shell is considered alive. The

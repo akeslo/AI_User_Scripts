@@ -35,7 +35,7 @@ export function loadMcasLogic() {
 // The tunables the userscript ships with, mirrored here so the tests exercise
 // the real thresholds rather than invented ones.
 export const CFG = {
-  graceMs: 30_000,
+  graceMs: 60_000,
   maxBodyTextLen: 40,
   maxAttempts: 2,
   attemptWindowMs: 10 * 60_000,
