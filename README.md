@@ -1,12 +1,20 @@
 # AI User Scripts
 
-This repository contains a collection of user scripts for bulk deleting conversations in Gemini, Claude, and ChatGPT.
+Userscripts for bulk deleting conversations in Gemini, Claude, and ChatGPT, plus an
+auth-recovery script for Microsoft 365 behind a Defender for Cloud Apps proxy.
 
 ## Scripts
 
 *   **Gemini Bulk Deleter.user.js**: A script to bulk delete conversations in Gemini.
 *   **Claude Bulk Deleter.user.js**: A script to bulk delete conversations in Claude. It distinguishes real Claude Code sessions from web chats by tag (not status) — only web chats are bulk-queued for deletion, while sessions require individual confirmation.
 *   **ChatGPT Bulk Deleter.user.js**: A script to bulk delete conversations in ChatGPT.
+*   **MCAS Auth Recovery.user.js**: Recovers Teams/Outlook when they hang forever on the
+    boot spinner behind the `*.mcas.ms` reverse proxy. Detects the specific failure
+    (empty MSAL token cache + `interaction_required` + `failed_to_redirect`, so the
+    sign-in redirect never fired and the page can never finish booting), clears only the
+    stale sign-in markers, and re-navigates to the canonical origin so a real top-level
+    sign-in can run. Requires both a dead shell and auth-failure evidence before acting,
+    shows a cancellable countdown, and is rate-limited so it can never redirect-loop.
 
 ## Installation
 
