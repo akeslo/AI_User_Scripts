@@ -44,6 +44,19 @@ npm install
 npm test
 ```
 
+## Helpers synchronization check
+
+The `sleep`/`get`/`showLog`/`log` helper functions are intentionally duplicated
+across the Claude, ChatGPT, and Gemini bulk deleter scripts rather than shared,
+and kept in sync by hand. `validate-helpers-sync.js` checks that all three
+copies still carry the `DUPLICATED HELPERS` marker, that their signatures
+match, and that the XSS-safety invariant (`log()` using `textContent`, never
+`innerHTML`) holds in every copy. Fast, no browser needed, safe for CI:
+
+```sh
+npm run check-sync
+```
+
 ## Selector-drift smoke check
 
 `check-selectors.js` is a manual, on-demand tool that opens each site in a
