@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Bulk Deleter (with Claude Code support)
 // @namespace    http://tampermonkey.net/
-// @version      2.1
+// @version      2.2
 // @description  Bulk delete Claude.ai chats and artifacts. Auto detects org id, paginates, keeps log visible on error, skips starred legacy chats, auto-queues web chats (cowork-remote sessions), confirms real Claude Code sessions and artifacts one by one. Collapsible bottom-right pull tab with progress-bar fill.
 // @author       akeslo
 // @match        https://claude.ai/*
@@ -519,9 +519,18 @@
     });
   }
 
+  // The bare Shift+<letter> log toggle must not fire while the user is typing —
+  // this page's primary interaction is a composer, so an unguarded handler toggles
+  // the overlay every time a capital letter is typed.
+  function isTypingTarget(e) {
+    const t = e.target;
+    if (!t || !t.tagName) return false;
+    return t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName);
+  }
+
   window.addEventListener('keydown', e => {
     if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'd') ensureUI();
-    if (e.shiftKey && e.key.toLowerCase() === 'd') {
+    if (!isTypingTarget(e) && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'd') {
       const el = get('#bd-log');
       if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
     }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Bulk Deleter
 // @namespace    http://tampermonkey.net/
-// @version      2.1
+// @version      2.2
 // @description  Delete all Gemini chats with two-click arm mechanism
 // @author       akeslo
 // @match        https://gemini.google.com/*
@@ -374,12 +374,21 @@
     });
   }
 
+  // The bare Shift+<letter> log toggle must not fire while the user is typing —
+  // this page's primary interaction is a composer, so an unguarded handler toggles
+  // the overlay every time a capital letter is typed.
+  function isTypingTarget(e) {
+    const t = e.target;
+    if (!t || !t.tagName) return false;
+    return t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName);
+  }
+
   window.addEventListener('keydown', e => {
     if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'd') {
       ensureUI();
       log('UI remounted');
     }
-    if (e.shiftKey && e.key.toLowerCase() === 'l') {
+    if (!isTypingTarget(e) && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'l') {
       const el = get('#gbd-log');
       if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
     }
@@ -393,7 +402,7 @@
       S.running = true;
       showLog(true);
       btn.disabled = true;
-      btn.textContent = 'Scanning...';
+      setBtn('Scanning...', 0);
       log('='.repeat(50));
       log('Scanning for conversations...');
 
@@ -411,7 +420,7 @@
       S.running = false;
 
       if (!S.convos.length) {
-        btn.textContent = 'Delete All Chats';
+        setBtn('Delete All Chats', 0);
         log('✗ No conversations found');
         log('Make sure chat history is visible in the sidebar');
         setTimeout(() => showLog(false), 3000);
@@ -420,7 +429,7 @@
 
       S.armed = true;
       btn.classList.add('gbd-armed');
-      btn.textContent = `Click again to delete ${S.convos.length} chats`;
+      setBtn(`Click again to delete ${S.convos.length} chats`, 0);
       log(`✓ Found ${S.convos.length} conversations`);
       log('ARMED - Click button again to start deletion');
       return;
@@ -449,7 +458,7 @@
 
       for (let i = 0; i < targets.length; i++) {
         const { key, title } = targets[i];
-        btn.textContent = `Deleting ${i + 1}/${targets.length}...`;
+        setBtn(`Deleting ${i + 1}/${targets.length}...`, (i / targets.length) * 100);
 
         const convo = findLiveConversation(key, title, usedNodes);
         if (!convo || !document.contains(convo)) {
@@ -479,7 +488,7 @@
       log(`COMPLETE: ${ok} deleted, ${fail} failed (${targets.length} total)`);
       log('='.repeat(50));
 
-      btn.textContent = 'Delete All Chats';
+      setBtn('Delete All Chats', 0);
       btn.disabled = false;
       S.running = false;
 

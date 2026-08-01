@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Bulk Deleter
 // @namespace    http://tampermonkey.net/
-// @version      2.1
+// @version      2.2
 // @description  Delete all chats with visible log that shows while running and hides when done. Auto remounts UI on changes.
 // @author       akeslo
 // @match        https://chatgpt.com/*
@@ -321,9 +321,18 @@
   }
 
   // rescue hotkey: Ctrl Alt D remounts, Shift L D toggles log
+  // The bare Shift+<letter> log toggle must not fire while the user is typing —
+  // this page's primary interaction is a composer, so an unguarded handler toggles
+  // the overlay every time a capital letter is typed.
+  function isTypingTarget(e) {
+    const t = e.target;
+    if (!t || !t.tagName) return false;
+    return t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName);
+  }
+
   window.addEventListener('keydown', e => {
     if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'd'){ ensureUI(); }
-    if (e.shiftKey && e.key.toLowerCase() === 'd'){
+    if (!isTypingTarget(e) && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'd'){
       const el = get('#bd-log');
       if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
     }
@@ -341,7 +350,7 @@
       btn.disabled = true;
       log('starting');
       const bearer = await getBearer();
-      btn.textContent = 'Scanning...';
+      setBtn('Scanning...', 0);
       const ids = await listAllIds(bearer);
       S.ids = ids;
       btn.disabled = false;
@@ -349,13 +358,13 @@
       showLog(false);
 
       if (!ids.length){
-        btn.textContent = 'Delete All Chats';
+        setBtn('Delete All Chats', 0);
         btn.classList.remove('bd-armed');
         log('no ids found');
         return;
       }
       S.armed = true;
-      btn.textContent = `Click again to delete ${ids.length} chats`;
+      setBtn(`Click again to delete ${ids.length} chats`, 0);
       btn.classList.add('bd-armed');
       log(`armed with ${ids.length} ids`);
       return;
@@ -380,14 +389,14 @@
       let ok = 0, fail = 0;
       for (let i = 0; i < ids.length; i++){
         const id = ids[i];
-        btn.textContent = `Deleting ${i + 1}/${ids.length}...`;
+        setBtn(`Deleting ${i + 1}/${ids.length}...`, (i / ids.length) * 100);
         const good = await deleteOne(id, bearer);
         if (good) ok++; else fail++;
         await sleep(120);
       }
 
       log(`done ok ${ok} fail ${fail}`);
-      btn.textContent = 'Delete All Chats';
+      setBtn('Delete All Chats', 0);
       btn.disabled = false;
       S.running = false;
       if (fail > 0){
