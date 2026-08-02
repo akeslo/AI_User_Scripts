@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Bulk Deleter (with Claude Code support)
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.3
 // @description  Bulk delete Claude.ai chats and artifacts. Auto detects org id, paginates, keeps log visible on error, skips starred legacy chats, auto-queues web chats (cowork-remote sessions), confirms real Claude Code sessions and artifacts one by one. Collapsible bottom-right pull tab with progress-bar fill.
 // @author       akeslo
 // @match        https://claude.ai/*
@@ -66,7 +66,12 @@
     const line = a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ');
     S.logStore.push(`[${new Date().toLocaleTimeString()}] ${line}`);
     const pre = get('#bd-pre');
-    if (pre) pre.textContent = S.logStore.join('\n');
+    if (pre) {
+      pre.textContent = S.logStore.join('\n');
+      // The scroller is the panel (#bd-log has overflow:auto), not the <pre> inside it.
+      const panel = get('#bd-log');
+      if (panel) panel.scrollTop = panel.scrollHeight;
+    }
     console.log('[ClaudeBulkDeleter]', ...a);
   }
 

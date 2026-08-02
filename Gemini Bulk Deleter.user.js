@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gemini Bulk Deleter
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.3
 // @description  Delete all Gemini chats with two-click arm mechanism
 // @author       akeslo
 // @match        https://gemini.google.com/*
@@ -77,7 +77,10 @@
     const pre = get('#gbd-pre');
     if (pre) {
       pre.textContent = S.logStore.join('\n');
-      pre.scrollTop = pre.scrollHeight;
+      // The scroller is the panel (#gbd-log has overflow:auto), not the <pre> inside it —
+      // setting pre.scrollTop is a no-op and leaves the newest lines off-screen.
+      const panel = get('#gbd-log');
+      if (panel) panel.scrollTop = panel.scrollHeight;
     }
     console.log('[GeminiBulkDeleter]', ...a);
   }
@@ -509,7 +512,7 @@
       return;
     }
 
-    log('Gemini Bulk Deleter v2.1 loaded');
+    log('Gemini Bulk Deleter v2.3 loaded');
     log('Two-click mechanism: First click scans, second click deletes');
     ensureUI();
     hookSPARouteChanges();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Bulk Deleter
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.3
 // @description  Delete all chats with visible log that shows while running and hides when done. Auto remounts UI on changes.
 // @author       akeslo
 // @match        https://chatgpt.com/*
@@ -71,7 +71,12 @@
     const line = `[${timestamp}] ` + a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ');
     S.logStore.push(line);
     const pre = get('#bd-pre');
-    if (pre) pre.textContent = S.logStore.join('\n');
+    if (pre) {
+      pre.textContent = S.logStore.join('\n');
+      // The scroller is the panel (#bd-log has overflow:auto), not the <pre> inside it.
+      const panel = get('#bd-log');
+      if (panel) panel.scrollTop = panel.scrollHeight;
+    }
     console.log('[BulkDeleter]', ...a);
   }
 

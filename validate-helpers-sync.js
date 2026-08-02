@@ -61,20 +61,67 @@ scripts.forEach(({ name }) => {
   }
 });
 
-// Check for required helper functions in all three
+// Check for required helper functions in all three, and that their signatures agree.
+// Presence alone is not enough: a divergence in the parameter list of a hand-mirrored
+// helper is exactly the drift this check exists to catch, and the README documents
+// this as a signature comparison.
 console.log('\nChecking for required helper functions...');
 const requiredHelpers = ['sleep', 'get', 'showLog', 'log'];
+
+// Returns the normalized parameter list of `helper` in `content`, or null if absent.
+// Handles both `function name(args)` and `const name = (args) =>` / `const name = arg =>`.
+function extractSignature(content, helper) {
+  const fnDecl = content.match(
+    new RegExp(`function\\s+${helper}\\s*\\(([^)]*)\\)`)
+  );
+  if (fnDecl) return normalizeParams(fnDecl[1]);
+
+  const arrow = content.match(
+    new RegExp(`const\\s+${helper}\\s*=\\s*(?:\\(([^)]*)\\)|([A-Za-z_$][\\w$]*))\\s*=>`)
+  );
+  if (arrow) return normalizeParams(arrow[1] !== undefined ? arrow[1] : arrow[2]);
+
+  return null;
+}
+
+function normalizeParams(params) {
+  return (params || '')
+    .split(',')
+    .map(p => p.trim())
+    .filter(Boolean)
+    .join(', ');
+}
+
+const signatures = new Map(); // helper -> [{ name, signature }]
+
 scripts.forEach(({ name }) => {
   const content = readFileSync(name, 'utf-8');
 
   requiredHelpers.forEach(helper => {
-    if (content.includes(`function ${helper}(`) || content.includes(`const ${helper} =`)) {
-      // Found it
-    } else {
+    const signature = extractSignature(content, helper);
+    if (signature === null) {
       console.error(`✗ ${name}: missing helper function "${helper}"`);
       hasErrors = true;
+      return;
     }
+    if (!signatures.has(helper)) signatures.set(helper, []);
+    signatures.get(helper).push({ name, signature });
   });
+});
+
+console.log('\nChecking helper signatures match across copies...');
+requiredHelpers.forEach(helper => {
+  const found = signatures.get(helper) || [];
+  if (found.length < scripts.length) return; // missing copies already reported above
+
+  const distinct = [...new Set(found.map(f => f.signature))];
+  if (distinct.length > 1) {
+    console.error(`✗ ${helper}(): signatures diverge across copies:`);
+    found.forEach(f => console.error(`    ${f.name}: ${helper}(${f.signature})`));
+    hasErrors = true;
+  } else {
+    console.log(`✓ ${helper}(${distinct[0]}): identical in all ${found.length} copies`);
+  }
 });
 
 if (!hasErrors) {
