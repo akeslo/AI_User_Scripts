@@ -72,8 +72,14 @@
  * a manual gate even though it's not CI-gated.
  */
 
-const path = require('path');
-const { chromium } = require('playwright');
+// package.json is `"type": "module"`, so this file is an ES module: `require`
+// and `__dirname` are both absent here and using them throws before the first
+// check runs. Keep these as ESM imports.
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { chromium } from 'playwright';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PROFILE_DIR = path.join(__dirname, '.playwright-profile');
 

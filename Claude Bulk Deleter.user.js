@@ -156,6 +156,15 @@
     }
   }
 
+  // Every exit from fetchAllChats() must hand back normalized rows. deleteChat() reads
+  // `_id`, so a raw (un-normalized) row silently becomes a DELETE against
+  // /chat_conversations/undefined, and the caller's de-dupe collapses all of them into
+  // one entry. The early-return error/fallback paths below are exactly where that used
+  // to happen, so normalization lives here rather than only at the happy-path return.
+  function normalizeChats(rows) {
+    return rows.map(c => ({ ...c, _kind: 'chat', _id: c.uuid, _title: c.name || '(no title)' }));
+  }
+
   async function fetchAllChats() {
     if (!orgId) {
       log('no org id, cannot fetch chats');
@@ -185,7 +194,7 @@
             });
             if (!r2.ok) {
               log(`plain fetch also failed status ${r2.status}`);
-              return all;
+              return normalizeChats(all);
             }
             const data = await r2.json();
             const arr = Array.isArray(data) ? data : (Array.isArray(data.conversations) ? data.conversations : []);
@@ -193,9 +202,9 @@
               if (c && c.uuid && !seen.has(c.uuid)) { seen.add(c.uuid); all.push(c); }
             }
             log(`fetched ${all.length} chats (plain)`);
-            return all;
+            return normalizeChats(all);
           }
-          return all;
+          return normalizeChats(all);
         }
         const data = await resp.json();
         const arr = Array.isArray(data) ? data : (Array.isArray(data.conversations) ? data.conversations : []);
@@ -214,7 +223,7 @@
       }
     }
     log(`total chats fetched ${all.length}`);
-    return all.map(c => ({ ...c, _kind: 'chat', _id: c.uuid, _title: c.name || '(no title)' }));
+    return normalizeChats(all);
   }
 
   // As of 2026-07, claude.ai serves BOTH ordinary web chats and Claude Code sessions from

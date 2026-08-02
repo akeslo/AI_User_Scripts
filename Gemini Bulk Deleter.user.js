@@ -120,9 +120,17 @@
   // re-query the live list for that key right before acting on it, falling back to
   // matching by title text. If neither is found, skip and log clearly rather than
   // acting on a possibly-recycled node.
+  // The key alone is NOT sufficient evidence: recycling reuses the DOM node and the
+  // dataset attribute travels with it, so a node tagged at scan time can carry the
+  // right key while already rendering a different chat. That is precisely the case
+  // this function exists to catch, so the key branch must corroborate with the title
+  // before we act; a key match with a mismatched title is treated as a recycled node
+  // and skipped, not deleted.
   function findLiveConversation(key, title, usedKeys) {
     const live = getConversationDivs();
-    let el = live.find(d => d.dataset.gbdKey === key && !usedKeys.has(d));
+    let el = live.find(
+      d => d.dataset.gbdKey === key && extractTitle(d) === title && !usedKeys.has(d)
+    );
     if (!el) {
       el = live.find(d => extractTitle(d) === title && !usedKeys.has(d));
     }

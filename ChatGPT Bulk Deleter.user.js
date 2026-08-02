@@ -200,8 +200,13 @@
       log(r.ok ? `bulk soft ok ${id} ${r.status}` : `bulk soft fail ${id} ${r.status}`);
       if (r.ok) return true;
     }
+    // Do NOT pass allow404 here. Three of the four URLs above are guesses at routes that
+    // may not exist, so a 404 is overwhelmingly "wrong route", not "already deleted".
+    // Accepting it made the first guessed route that 404'd short-circuit the whole loop
+    // and report a successful delete for a chat that is still there — the run printed
+    // `ok N fail 0` having deleted nothing.
     for (const u of urls){
-      const r = await http('DELETE', u, undefined, bearer, true);
+      const r = await http('DELETE', u, undefined, bearer);
       log(r.ok ? `hard ok ${id} ${r.status}` : `hard fail ${id} ${r.status} ${u}`);
       if (r.ok) return true;
     }

@@ -23,6 +23,26 @@ const scripts = [
 
 let hasErrors = false;
 
+// Returns the full source of `function <name>(...) { ... }` including its body,
+// matched by counting braces to the real closing brace. Returns null if absent.
+function extractFunctionBody(content, fnName) {
+  const header = new RegExp(`function\\s+${fnName}\\s*\\([^)]*\\)\\s*\\{`);
+  const m = content.match(header);
+  if (!m) return null;
+
+  const start = m.index;
+  let depth = 0;
+  for (let i = content.indexOf('{', start); i < content.length; i++) {
+    const ch = content[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return content.slice(start, i + 1);
+    }
+  }
+  return null; // unbalanced braces — treat as not extractable
+}
+
 // Check for DUPLICATED HELPERS comment in all three files
 console.log('Checking for DUPLICATED HELPERS marker...');
 scripts.forEach(({ name }) => {
@@ -40,15 +60,17 @@ console.log('\nChecking XSS-safety invariant in log()...');
 scripts.forEach(({ name }) => {
   const content = readFileSync(name, 'utf-8');
 
-  // Extract the log function
-  const logMatch = content.match(/function log\([^)]*\)\s*\{[\s\S]*?\n\s*\}/);
-  if (!logMatch) {
+  // Extract the log function by brace-counting, NOT by regex. A lazy
+  // `\{[\s\S]*?\n\s*\}` stops at the close of the first nested block (the
+  // `if (pre) { ... }` inside log()), so everything after it went uninspected
+  // and an innerHTML added below that point passed this check clean — while
+  // CLAUDE.local.md calls this check the enforcement of the XSS invariant.
+  const logFn = extractFunctionBody(content, 'log');
+  if (logFn === null) {
     console.error(`✗ ${name}: could not extract log() function`);
     hasErrors = true;
     return;
   }
-
-  const logFn = logMatch[0];
 
   if (logFn.includes('innerHTML')) {
     console.error(`✗ ${name}: log() function uses innerHTML (XSS risk!)`);
