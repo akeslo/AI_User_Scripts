@@ -8,18 +8,35 @@
  * 1. All three files contain the "DUPLICATED HELPERS" comment block
  * 2. The helper function signatures match (accounting for script-specific names like bd- vs gbd-)
  * 3. The XSS-safety invariant (textContent only in log) is maintained in all copies
+ * 4. Userscripts with no helper block but the same documented no-innerHTML
+ *    invariant (MCAS Auth Recovery) are checked file-wide for innerHTML
+ *
+ * Paths resolve against this file's directory, so it runs from any cwd.
  *
  * Usage: node validate-helpers-sync.js
  */
 
 import { readFileSync } from 'fs';
-import { resolve } from 'path';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
+
+// Resolve against this file's own directory, not process.cwd(). Reading the
+// userscripts by bare relative name meant the validator only ran from the repo
+// root — `npm run check-sync` worked (npm sets cwd to the package root) while a
+// direct `node path/to/validate-helpers-sync.js` died on ENOENT.
+const repoRoot = dirname(fileURLToPath(import.meta.url));
+const read = name => readFileSync(resolve(repoRoot, name), 'utf-8');
 
 const scripts = [
   { name: 'Claude Bulk Deleter.user.js', prefix: 'bd' },
   { name: 'ChatGPT Bulk Deleter.user.js', prefix: 'bd' },
   { name: 'Gemini Bulk Deleter.user.js', prefix: 'gbd' },
 ];
+
+// Userscripts that assert the no-innerHTML invariant in their own source but
+// carry no DUPLICATED HELPERS block, so they cannot join `scripts` above.
+// Without this list the claim in their header is enforced by nothing.
+const xssOnlyScripts = ['MCAS Auth Recovery.user.js'];
 
 let hasErrors = false;
 
@@ -46,7 +63,7 @@ function extractFunctionBody(content, fnName) {
 // Check for DUPLICATED HELPERS comment in all three files
 console.log('Checking for DUPLICATED HELPERS marker...');
 scripts.forEach(({ name }) => {
-  const content = readFileSync(name, 'utf-8');
+  const content = read(name);
   if (!content.includes('DUPLICATED HELPERS')) {
     console.error(`✗ ${name}: missing "DUPLICATED HELPERS" marker`);
     hasErrors = true;
@@ -58,7 +75,7 @@ scripts.forEach(({ name }) => {
 // Check for XSS-safety invariant (textContent only, never innerHTML) in log()
 console.log('\nChecking XSS-safety invariant in log()...');
 scripts.forEach(({ name }) => {
-  const content = readFileSync(name, 'utf-8');
+  const content = read(name);
 
   // Extract the log function by brace-counting, NOT by regex. A lazy
   // `\{[\s\S]*?\n\s*\}` stops at the close of the first nested block (the
@@ -80,6 +97,20 @@ scripts.forEach(({ name }) => {
   } else {
     console.error(`✗ ${name}: log() does not use either innerHTML or textContent`);
     hasErrors = true;
+  }
+});
+
+// The three bulk deleters route every log line through log(); MCAS builds its
+// banner inline instead, so the invariant there is file-wide rather than
+// scoped to one function.
+console.log('\nChecking no-innerHTML invariant in helper-less scripts...');
+xssOnlyScripts.forEach(name => {
+  const content = read(name);
+  if (/\binnerHTML\b/.test(content.replace(/^\s*\/\/.*$/gm, ''))) {
+    console.error(`\u2717 ${name}: uses innerHTML (XSS risk!) \u2014 this file documents a textContent-only invariant`);
+    hasErrors = true;
+  } else {
+    console.log(`\u2713 ${name}: no innerHTML`);
   }
 });
 
@@ -117,7 +148,7 @@ function normalizeParams(params) {
 const signatures = new Map(); // helper -> [{ name, signature }]
 
 scripts.forEach(({ name }) => {
-  const content = readFileSync(name, 'utf-8');
+  const content = read(name);
 
   requiredHelpers.forEach(helper => {
     const signature = extractSignature(content, helper);
