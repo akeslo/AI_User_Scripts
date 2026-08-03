@@ -402,6 +402,11 @@
         setBtn(`Deleting ${i + 1}/${ids.length}...`, (i / ids.length) * 100);
         const good = await deleteOne(id, bearer);
         if (good) ok++; else fail++;
+        // Re-set after the delete resolves, as the Claude copy does. Setting the
+        // fill only from `i` means the bar tops out at (n-1)/n and never reaches
+        // 100% — the final item reads as a hang on the only progress indicator
+        // the user has during a long run.
+        setBtn(`Deleting ${i + 1}/${ids.length}...`, ((i + 1) / ids.length) * 100);
         await sleep(120);
       }
 

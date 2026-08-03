@@ -57,6 +57,11 @@ match, and that the XSS-safety invariant (`log()` using `textContent`, never
 npm run check-sync
 ```
 
+`npm test` also runs this validator (via `tests/helpers-sync.test.js`), so a
+change that breaks either invariant fails the normal test run — you do not have
+to remember the command above. Run it directly when you want just this check, or
+its full per-file output.
+
 ## Selector-drift smoke check
 
 `check-selectors.js` is a manual, on-demand tool that opens each site in a

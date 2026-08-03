@@ -126,15 +126,22 @@
   // this function exists to catch, so the key branch must corroborate with the title
   // before we act; a key match with a mismatched title is treated as a recycled node
   // and skipped, not deleted.
+  // The title-only fallback below carries no key at all, so it cannot corroborate
+  // anything — and titles are truncated to 40 chars and default to 'Untitled', so
+  // several live rows sharing one title is routine rather than exotic. Taking the
+  // first match there would act on an arbitrary one of them, which is the exact
+  // "acted on the wrong row" outcome the key check exists to prevent. So the
+  // fallback is only trusted when it is unambiguous: exactly one unused live row
+  // bears that title. Otherwise skip and let the caller log it.
   function findLiveConversation(key, title, usedKeys) {
     const live = getConversationDivs();
-    let el = live.find(
+    const el = live.find(
       d => d.dataset.gbdKey === key && extractTitle(d) === title && !usedKeys.has(d)
     );
-    if (!el) {
-      el = live.find(d => extractTitle(d) === title && !usedKeys.has(d));
-    }
-    return el || null;
+    if (el) return el;
+
+    const byTitle = live.filter(d => extractTitle(d) === title && !usedKeys.has(d));
+    return byTitle.length === 1 ? byTitle[0] : null;
   }
 
   function findMenuButtonForConversation(convoDiv) {
@@ -474,7 +481,7 @@
         const convo = findLiveConversation(key, title, usedNodes);
         if (!convo || !document.contains(convo)) {
           fail++;
-          log(`[${i + 1}/${targets.length}] ✗ "${title}" - skipped: no matching live node found (already deleted, or the virtualized list recycled this row)`);
+          log(`[${i + 1}/${targets.length}] ✗ "${title}" - skipped: no unambiguous live node found (already deleted, the virtualized list recycled this row, or several visible chats share this title)`);
           continue;
         }
         usedNodes.add(convo);
