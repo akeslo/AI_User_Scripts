@@ -252,6 +252,17 @@
     return tags.includes(WEB_CHAT_TAG);
   }
 
+  // The button says "Delete Unstarred Chats", but star-skipping was applied only to
+  // legacy chat_conversations; web chats went straight into the queue. Today the
+  // sessions endpoint omits the field, so nothing is starred there and the gap is
+  // invisible — the day it starts returning one, this tool silently deletes a chat
+  // the user explicitly protected, with no undo. Check every queued item instead,
+  // and treat pinned the same as starred.
+  function isProtectedFromBulkDelete(item) {
+    if (!item || typeof item !== 'object') return false;
+    return Boolean(item.is_starred || item.is_pinned || item.starred || item.pinned);
+  }
+
   async function fetchAllSessions() {
     try {
       const resp = await fetch(`${location.origin}/v1/code/sessions?limit=200&exclude_tags=-`, {
@@ -583,16 +594,22 @@
       let starredCount = 0;
 
       legacyChats.forEach(c => {
-        if (c.is_starred) {
+        if (isProtectedFromBulkDelete(c)) {
           starredCount++;
         } else {
           normalChats.push(c);
         }
       });
 
-      // Web chats are ordinary conversations - bulk-queue them, same as legacy chats.
+      // Web chats are ordinary conversations - bulk-queue them, same as legacy chats,
+      // but run them through the same star/pin guard rather than trusting that the
+      // sessions endpoint will never expose the field.
       // Real Claude Code sessions are live agent runs, so they stay behind a per-item confirm.
-      const webChats = allSessions.filter(s => s._webChat);
+      const webChats = allSessions.filter(s => {
+        if (!s._webChat) return false;
+        if (isProtectedFromBulkDelete(s)) { starredCount++; return false; }
+        return true;
+      });
       const codeSessions = allSessions.filter(s => !s._webChat);
 
       S.chats = normalChats.concat(webChats);

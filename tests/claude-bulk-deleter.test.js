@@ -94,3 +94,32 @@ describe('Claude Bulk Deleter — /v1/code/sessions/<id> (DELETE)', () => {
     expect(opts.headers).toMatchObject({ 'x-frame-cp': 'go' });
   });
 });
+
+describe('Claude Bulk Deleter — star/pin guard on the bulk queue', () => {
+  // The button promises "Delete Unstarred Chats", but the guard was applied only to
+  // legacy chat_conversations; web-chat sessions were queued unconditionally. The
+  // sessions endpoint omits the field today, which is exactly what makes the gap
+  // invisible until the day it does not.
+  const api = () => loadClaudeApi({ fetch: vi.fn() });
+
+  it('protects a starred item', () => {
+    expect(api().isProtectedFromBulkDelete({ is_starred: true })).toBe(true);
+  });
+
+  it('protects a pinned item, not just a starred one', () => {
+    expect(api().isProtectedFromBulkDelete({ is_pinned: true })).toBe(true);
+    expect(api().isProtectedFromBulkDelete({ pinned: true })).toBe(true);
+    expect(api().isProtectedFromBulkDelete({ starred: true })).toBe(true);
+  });
+
+  it('does not protect an ordinary chat', () => {
+    expect(api().isProtectedFromBulkDelete({ uuid: 'abc', name: 'hello' })).toBe(false);
+    expect(api().isProtectedFromBulkDelete({ is_starred: false })).toBe(false);
+  });
+
+  it('treats a missing star field as unprotected rather than throwing', () => {
+    expect(api().isProtectedFromBulkDelete({})).toBe(false);
+    expect(api().isProtectedFromBulkDelete(null)).toBe(false);
+    expect(api().isProtectedFromBulkDelete(undefined)).toBe(false);
+  });
+});
